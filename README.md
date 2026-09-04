@@ -232,3 +232,5 @@ Ver [CONTRIBUTING.md](CONTRIBUTING.md). En corto: cero dependencias, se verifica
 ## Licencia
 
 [Apache License 2.0](LICENSE). La licencia **no otorga derechos sobre las marcas** de Sequentia: se puede usar y forkear el código, no llamarle Sequentia a un fork.
+
+<!-- prueba del flujo de PR -->
