@@ -8,8 +8,8 @@ Probá las capacidades de integración de [Sequentia](https://sequentia.co) desd
 
 ```bash
 npm install -g sequentia-test-cli
-sq-mcp init          # crea ~/.config/sq-mcp/.env — poné ahí tu API key
-sq-mcp               # el menú
+sq-test init          # crea ~/.config/sq-test/.env — poné ahí tu API key
+sq-test               # el menú
 ```
 
 Se usa de dos formas: un **menú interactivo** para explorar, y un **CLI** para scriptear. El menú imprime **el comando equivalente a cada acción y cuánto tardó**, así que se explora clickeando números y se sale sabiendo el comando exacto para automatizarlo.
@@ -22,21 +22,21 @@ Requiere Node >= 18.
 
 ```bash
 npm install -g sequentia-test-cli
-sq-mcp init
+sq-test init
 ```
 
-`sq-mcp init` crea `~/.config/sq-mcp/.env`. Editalo y poné tu API key de Sequentia en `SQ_MCP_TOKEN`. Después, desde cualquier directorio:
+`sq-test init` crea `~/.config/sq-test/.env`. Editalo y poné tu API key de Sequentia en `SQ_TEST_TOKEN`. Después, desde cualquier directorio:
 
 ```bash
-sq-mcp               # el menú
-sq-mcp list-kbs      # el CLI
+sq-test               # el menú
+sq-test list-kbs      # el CLI
 ```
 
 ### En Windows
 
-El shim queda en `%APPDATA%\npm\sq-mcp` (con sus variantes `.cmd` y `.ps1`), directorio que npm ya deja en el PATH. Si `sq-mcp` no resuelve, reabrí la terminal.
+El shim queda en `%APPDATA%\npm\sq-test` (con sus variantes `.cmd` y `.ps1`), directorio que npm ya deja en el PATH. Si `sq-test` no resuelve, reabrí la terminal.
 
-Para actualizar, `npm update -g sequentia-test-cli`. Para desinstalar, `npm uninstall -g sequentia-test-cli` — **el `~/.config/sq-mcp/.env` sobrevive**, que es justamente el motivo de que la config no viva junto al código.
+Para actualizar, `npm update -g sequentia-test-cli`. Para desinstalar, `npm uninstall -g sequentia-test-cli` — **el `~/.config/sq-test/.env` sobrevive**, que es justamente el motivo de que la config no viva junto al código.
 
 ### Dónde busca la configuración
 
@@ -45,11 +45,11 @@ Se **fusionan**, de menor a mayor prioridad, y las variables de entorno del proc
 | Origen | Para qué |
 | :--- | :--- |
 | directorio de instalación `/.env` | compatibilidad con quien trabaje desde el repo |
-| `~/.config/sq-mcp/.env` | **la config del usuario**; sobrevive a reinstalar |
+| `~/.config/sq-test/.env` | **la config del usuario**; sobrevive a reinstalar |
 | `./.env` del directorio actual | pisar valores en un proyecto puntual |
-| `$SQ_MCP_ENV_FILE` | apuntar a un archivo específico |
+| `$SQ_TEST_ENV_FILE` | apuntar a un archivo específico |
 
-Se fusionan en vez de tomar el primero que exista a propósito: un `.env` ajeno en el directorio actual, sin claves `SQ_MCP_*`, no debe tapar tu config y dejarte sin token. Con `--verbose`, y en el mensaje de token faltante, se listan los archivos que se leyeron.
+Se fusionan en vez de tomar el primero que exista a propósito: un `.env` ajeno en el directorio actual, sin claves `SQ_TEST_*`, no debe tapar tu config y dejarte sin token. Con `--verbose`, y en el mensaje de token faltante, se listan los archivos que se leyeron.
 
 ### Desde el código (desarrollo)
 
@@ -57,16 +57,16 @@ Se fusionan en vez de tomar el primero que exista a propósito: un `.env` ajeno 
 git clone https://github.com/boostack-co/sequentia-test-cli.git
 cd sequentia-test-cli
 cp .env.example .env       # y poné tu token
-node sq-mcp.mjs
+node sq-test.mjs
 ```
 
-Corriendo así, los comandos que imprime el menú dicen `node sq-mcp.mjs …` en vez de `sq-mcp …`: se adapta a cómo lo invocaste, para que la línea siga siendo pegable.
+Corriendo así, los comandos que imprime el menú dicen `node sq-test.mjs …` en vez de `sq-test …`: se adapta a cómo lo invocaste, para que la línea siga siendo pegable.
 
 El `.env` **no se commitea** — el `.gitignore` lo cubre. Nunca lo agregues a la fuerza: tiene tu API key.
 
 ## El menú
 
-`node sq-mcp.mjs` sin argumentos abre el menú (requiere terminal; por pipe o redirección imprime la ayuda y sale con 2, para no colgar scripts).
+`node sq-test.mjs` sin argumentos abre el menú (requiere terminal; por pipe o redirección imprime la ayuda y sale con 2, para no colgar scripts).
 
 ```
   Test de Integraciones SEQUENTIA
@@ -84,7 +84,7 @@ Dentro de `1. MCP` están las 12 herramientas más `tools`, numeradas `1.1`…`1
 Cada acción se enmarca entre el comando y el tiempo:
 
 ```
-  $ node sq-mcp.mjs query-kb --kb devops-arquitectura --q 'Como monitoreo un Azure App Service' --mode fast --limit 2
+  $ node sq-test.mjs query-kb --kb devops-arquitectura --q 'Como monitoreo un Azure App Service' --mode fast --limit 2
   ────────────────────────────────────────────────────────────────────────
   Para monitorear un Azure App Service, …
   ────────────────────────────────────────────────────────────────────────
@@ -112,8 +112,8 @@ Gasta llamadas reales contra el endpoint configurado. **Sale con 1 si alguna acc
 ## Uso del CLI
 
 ```bash
-node sq-mcp.mjs <comando> [opciones]
-node sq-mcp.mjs --help
+node sq-test.mjs <comando> [opciones]
+node sq-test.mjs --help
 ```
 
 `--kb` acepta el **UUID o el slug/nombre** de la KB; si le das un slug lo resuelve solo contra `list_knowledge_bases`.
@@ -156,23 +156,23 @@ Los booleanos (`--json`, `--raw`, `--verbose`, `--yes`) no toman valor: se usan 
 
 `0` ok · `1` la herramienta devolvió `isError` · `2` uso o configuración · `3` transporte, auth o rate limit.
 
-Pensado para scriptear: `node.exe sq-mcp.mjs search --kb X --q Y --json | jq -r '.[].slug'`.
+Pensado para scriptear: `node.exe sq-test.mjs search --kb X --q Y --json | jq -r '.[].slug'`.
 
 > **En Git Bash interactivo usá `node.exe`, no `node`, cuando pipees.**
 > Git for Windows aliasea `node` a `winpty node.exe` en terminales mintty
 > (`/etc/profile.d/aliases.sh`), y `winpty` aborta con **`stdout is not a tty`**
 > apenas su salida va a un pipe en vez de a la consola. No es un problema del CLI.
 > Alternativas equivalentes: `command node`, `\node`, o `unalias node` en la sesión.
-> Sin pipe, `node sq-mcp.mjs ...` anda igual.
+> Sin pipe, `node sq-test.mjs ...` anda igual.
 
 ### Ejemplos
 
 ```bash
-node sq-mcp.mjs tools
-node sq-mcp.mjs query-kb --kb devops-arquitectura --q "Como monitoreo un App Service" --mode fast --limit 3
-node.exe sq-mcp.mjs search --kb kb-privada-python --q decorators --json | jq -r '.[].slug'
-node sq-mcp.mjs get-article --kb kb-privada-python --slug understanding-what-functions-are
-node sq-mcp.mjs call get_workspace_glossary '{}'
+node sq-test.mjs tools
+node sq-test.mjs query-kb --kb devops-arquitectura --q "Como monitoreo un App Service" --mode fast --limit 3
+node.exe sq-test.mjs search --kb kb-privada-python --q decorators --json | jq -r '.[].slug'
+node sq-test.mjs get-article --kb kb-privada-python --slug understanding-what-functions-are
+node sq-test.mjs call get_workspace_glossary '{}'
 ```
 
 ## Cómo funciona el servidor (verificado en vivo, no según la doc)
@@ -208,7 +208,7 @@ La referencia pública de las herramientas muestra ejemplos de `tools/call` suel
 | Archivo | Rol |
 | :--- | :--- |
 | `mcp-client.mjs` | `SequentiaMcpClient` — transporte reusable (handshake, SSE, sesión, reintentos, errores). Importable desde otros scripts. |
-| `sq-mcp.mjs` | El CLI: flags, subcomandos, formato, exit codes. |
+| `sq-test.mjs` | El CLI: flags, subcomandos, formato, exit codes. |
 | `.env.example` | Plantilla de configuración. |
 
 ### Usarlo como librería
@@ -216,7 +216,7 @@ La referencia pública de las herramientas muestra ejemplos de `tools/call` suel
 ```js
 import { SequentiaMcpClient } from "./mcp-client.mjs";
 
-const client = new SequentiaMcpClient({ url: "https://mcp.sequentia.co/mcp", token: process.env.SQ_MCP_TOKEN });
+const client = new SequentiaMcpClient({ url: "https://mcp.sequentia.co/mcp", token: process.env.SQ_TEST_TOKEN });
 try {
   const { data } = await client.call("list_knowledge_bases", {});
   console.log(data); // ya des-anidado

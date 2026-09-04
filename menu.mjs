@@ -495,14 +495,14 @@ function ioDeTerminal() {
  *   `readline` sobre un pipe lee una línea y se cuelga, así que sin esta
  *   costura no habría forma de ejercerlo de punta a punta.
  * @param {object} [opts.flags] Flags globales del CLI (`--url`, `--token`,
- *   `--verbose`). Descartarlos hacía que `sq-mcp --url <otro>` abriera un menú
+ *   `--verbose`). Descartarlos hacía que `sq-test --url <otro>` abriera un menú
  *   apuntando al endpoint por default.
  */
 export async function correrMenu({ io = ioDeTerminal(), flags = {} } = {}) {
   const cfg = resolveConfig(flags);
   // --verbose se aceptaba al abrir el menú y no se usaba: la traza de sesión,
   // rate limit y sesiones sin cerrar nunca aparecía.
-  const onDebug = flags.verbose ? (msg) => console.error(`[sq-mcp] ${msg}`) : null;
+  const onDebug = flags.verbose ? (msg) => console.error(`[sq-test] ${msg}`) : null;
   const sesion = new Sesion(cfg, { onDebug });
   if (onDebug) onDebug(`endpoint ${cfg.url}`);
   const rl = io;

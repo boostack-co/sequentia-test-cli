@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * sq-mcp — frente de línea de comandos del Test de Integraciones SEQUENTIA.
+ * sq-test — frente de línea de comandos del Test de Integraciones SEQUENTIA.
  *
- *   node sq-mcp.mjs                  # sin argumentos abre el menú interactivo
- *   node sq-mcp.mjs list-kbs
- *   node sq-mcp.mjs query-kb --kb devops-arquitectura --q "..." --mode fast
- *   node sq-mcp.mjs call search_articles '{"knowledgeBaseId":"...","query":"..."}'
+ *   node sq-test.mjs                  # sin argumentos abre el menú interactivo
+ *   node sq-test.mjs list-kbs
+ *   node sq-test.mjs query-kb --kb devops-arquitectura --q "..." --mode fast
+ *   node sq-test.mjs call search_articles '{"knowledgeBaseId":"...","query":"..."}'
  *
  * El catálogo de comandos vive en commands.mjs, compartido con el menú.
  * Ver README.md. Exit codes: 0 ok · 1 la herramienta devolvió isError ·
@@ -154,9 +154,9 @@ function usage() {
   const width = Math.max(...Object.keys(COMMANDS).map((k) => k.length), "call <tool>".length, "tools".length);
   const rows = Object.entries(COMMANDS).map(([name, cmd]) => `  ${name.padEnd(width)}  ${cmd.help}`);
   // La ayuda usa el mismo prefijo que los comandos impresos: instalado dice
-  // `sq-mcp`, desde el repo dice `node sq-mcp.mjs`.
+  // `sq-test`, desde el repo dice `node sq-test.mjs`.
   const cmd = invocationPrefix();
-  return `sq-mcp — Test de Integraciones SEQUENTIA
+  return `sq-test — Test de Integraciones SEQUENTIA
 
 USO
   ${cmd}${" ".repeat(Math.max(1, 34 - cmd.length))}abre el menú interactivo
@@ -164,7 +164,7 @@ USO
 
 COMANDOS
 ${rows.join("\n")}
-  ${"init".padEnd(width)}  Crea la configuración del usuario (~/.config/sq-mcp/.env).
+  ${"init".padEnd(width)}  Crea la configuración del usuario (~/.config/sq-test/.env).
   ${"tools".padEnd(width)}  Lista las herramientas que el servidor declara de verdad.
   ${"call <tool>".padEnd(width)}  Escotilla genérica: ${cmd} call <tool> '<json-args>'
 
@@ -179,15 +179,15 @@ OPCIONES GLOBALES
 
 NOTAS
   --kb acepta el UUID o el slug/nombre de la KB (se resuelve solo).
-  La API key sale de ~/.config/sq-mcp/.env (SQ_MCP_TOKEN);
-  creá ese archivo con  sq-mcp init  . También se leen ./.env y \$SQ_MCP_ENV_FILE.
+  La API key sale de ~/.config/sq-test/.env (SQ_TEST_TOKEN);
+  creá ese archivo con  sq-test init  . También se leen ./.env y \$SQ_TEST_ENV_FILE.
 
 EXIT CODES
   0 ok · 1 la herramienta devolvió isError · 2 uso/config · 3 transporte/auth`;
 }
 
 /**
- * `sq-mcp init` — crea la config del usuario. Es lo que vuelve usable una
+ * `sq-test init` — crea la config del usuario. Es lo que vuelve usable una
  * instalación global: con `npm install -g` el paquete queda en node_modules,
  * que no es lugar para dejar un token ni sobrevive a una actualización.
  *
@@ -207,7 +207,7 @@ function comandoInit() {
   }
 
   if (files.length) console.log(`\nArchivos de config que se están leyendo: ${files.join(", ")}`);
-  console.log("\nDespués, para probar:  sq-mcp tools");
+  console.log("\nDespués, para probar:  sq-test tools");
   return EXIT_OK;
 }
 
@@ -229,7 +229,7 @@ async function main() {
     // nunca llega.
     if (stdin.isTTY && stdout.isTTY) {
       // Los flags de configuración se le pasan al menú. Descartarlos hacía que
-      // `sq-mcp --url <otro>` abriera un menú apuntando al endpoint default:
+      // `sq-test --url <otro>` abriera un menú apuntando al endpoint default:
       // una opción ignorada en silencio, con acciones que cobran crédito.
       assertKnownFlags(flags, [], "el menú", MENU_FLAGS);
       const { correrMenu } = await import("./menu.mjs");
@@ -245,7 +245,7 @@ async function main() {
   // hay config, así que no puede exigirla.
   if (commandName === "init") {
     assertKnownFlags(flags, [], "init", new Set());
-    assertPositionals(positional, 1, "init", "sq-mcp init");
+    assertPositionals(positional, 1, "init", "sq-test init");
     return comandoInit();
   }
 
@@ -261,7 +261,7 @@ async function main() {
   }
 
   const { url, token } = resolveConfig(flags);
-  const onDebug = flags.verbose ? (msg) => console.error(`[sq-mcp] ${msg}`) : null;
+  const onDebug = flags.verbose ? (msg) => console.error(`[sq-test] ${msg}`) : null;
   if (onDebug) onDebug(`endpoint ${url}`);
 
   const client = new SequentiaMcpClient({ url, token, onDebug });
@@ -270,7 +270,7 @@ async function main() {
     // --- tools: lo que el servidor declara realmente ---
     if (isTools) {
       assertKnownFlags(flags, [], "tools");
-      assertPositionals(positional, 1, "tools", "node sq-mcp.mjs tools");
+      assertPositionals(positional, 1, "tools", "node sq-test.mjs tools");
       const { tools, envelope } = await client.listTools();
       if (flags.raw) {
         // --raw es el sobre JSON-RPC; --json, el payload des-anidado. Antes los
@@ -297,9 +297,9 @@ async function main() {
     if (isCall) {
       // `call` no toma opciones propias: los argumentos van en el JSON posicional.
       assertKnownFlags(flags, [], "call");
-      assertPositionals(positional, 3, "call", "node sq-mcp.mjs call <tool> '<json-args>'");
+      assertPositionals(positional, 3, "call", "node sq-test.mjs call <tool> '<json-args>'");
       toolName = positional[1];
-      if (!toolName) throw new UsageError("Uso: node sq-mcp.mjs call <tool> '<json-args>'");
+      if (!toolName) throw new UsageError("Uso: node sq-test.mjs call <tool> '<json-args>'");
       const rawArgs = positional[2] ?? "{}";
       try {
         args = JSON.parse(rawArgs);
@@ -313,7 +313,7 @@ async function main() {
       toolName = command.tool;
       printer = command.print;
       assertKnownFlags(flags, command.opts ?? [], commandName);
-      assertPositionals(positional, 1, commandName, `node sq-mcp.mjs ${commandName} [opciones]`);
+      assertPositionals(positional, 1, commandName, `node sq-test.mjs ${commandName} [opciones]`);
     }
 
     // La guarda va acá, por NOMBRE DE HERRAMIENTA, para que `call verify_claim`
