@@ -1,6 +1,6 @@
 {
   "name": "sequentia-test-cli",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "type": "module",
   "description": "Test de Integraciones SEQUENTIA — menú y CLI para el servidor MCP.",
   "license": "Apache-2.0",
