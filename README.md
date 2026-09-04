@@ -118,10 +118,12 @@ node sq-test.mjs --help
 
 `--kb` acepta el **UUID o el slug/nombre** de la KB; si le das un slug lo resuelve solo contra `list_knowledge_bases`.
 
+El modo de consulta por defecto es **`fast`**: el uso normal de este banco es explorar, y ahí la latencia importa más que la profundidad — la diferencia contra `standard` es de varios segundos por consulta. Se envía explícitamente, así que el comando que ves es el que corre.
+
 | Comando | Herramienta MCP | Opciones |
 | :--- | :--- | :--- |
 | `list-kbs` | `list_knowledge_bases` | — |
-| `query-kb` | `query_knowledge_base` | `--kb --q [--mode fast\|standard\|precise] [--language] [--limit 1-20]` |
+| `query-kb` | `query_knowledge_base` | `--kb --q [--mode fast\|standard\|precise] [--language] [--limit 1-20]` · el modo por defecto es **`fast`** |
 | `search` | `search_articles` | `--kb --q [--category] [--status] [--limit 1-50]` |
 | `get-article` | `get_article` | `--kb` y `--id` **o** `--slug` |
 | `list-categories` | `list_categories` | `--kb` |

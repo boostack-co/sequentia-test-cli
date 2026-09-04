@@ -27,6 +27,18 @@ const CLI_FILE = "sq-test.mjs";
 /** El servidor MCP de Sequentia: el único endpoint que necesita un cliente. */
 export const DEFAULT_URL = "https://mcp.sequentia.co/mcp";
 
+/**
+ * Modo de consulta por defecto. El servidor usa `standard` si no se manda
+ * nada; este banco manda `fast` explicitamente porque su uso normal es
+ * explorar, y ahi la latencia importa mas que la profundidad. Se envia de
+ * verdad (no es solo un texto en el prompt), asi que el comando impreso y
+ * lo que corre coinciden.
+ */
+export const DEFAULT_MODE = "fast";
+
+/** Modos que acepta query_knowledge_base. */
+export const QUERY_MODES = ["fast", "standard", "precise"];
+
 /** Claves del `.env`. `SQ_TEST_URL` solo hace falta contra otro despliegue. */
 export const TOKEN_KEY = "SQ_TEST_TOKEN";
 export const URL_KEY = "SQ_TEST_URL";
@@ -341,18 +353,18 @@ export const COMMANDS = {
     tool: "query_knowledge_base",
     label: "Consultar una KB (RAG)",
     opts: ["kb", "q", "mode", "language", "limit"],
-    help: "Consulta una KB por RAG.  --kb --q [--mode fast|standard|precise] [--language] [--limit 1-20]",
+    help: "Consulta una KB por RAG.  --kb --q [--mode fast|standard|precise, default fast] [--language] [--limit 1-20]",
     needsKb: true,
     prompts: [
       { opt: "kb", label: "Knowledge base", kind: "kb", required: true },
       { opt: "q", label: "Pregunta", required: true, maxLen: 2000 },
-      { opt: "mode", label: "Modo", choices: ["fast", "standard", "precise"], default: "standard" },
+      { opt: "mode", label: "Modo", choices: QUERY_MODES, default: DEFAULT_MODE },
       { opt: "limit", label: "Fuentes", range: [1, 20], default: 5 },
       { opt: "language", label: "Idioma", hint: "en, es… (Enter para omitir)" },
     ],
     build: (flags, kbId) =>
       put(
-        put(put({ knowledgeBaseId: kbId, question: maxLen(required(flags, "q", "la pregunta"), 2000, "q") }, "mode", oneOf(flags, "mode", ["fast", "standard", "precise"])), "language", flags.language),
+        put(put({ knowledgeBaseId: kbId, question: maxLen(required(flags, "q", "la pregunta"), 2000, "q") }, "mode", oneOf(flags, "mode", QUERY_MODES) ?? DEFAULT_MODE), "language", flags.language),
         "limit",
         intInRange(flags, "limit", 1, 20),
       ),
