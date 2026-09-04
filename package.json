@@ -1,0 +1,44 @@
+{
+  "name": "sequentia-test-cli",
+  "version": "1.1.0",
+  "type": "module",
+  "description": "Test de Integraciones SEQUENTIA — menú y CLI para el servidor MCP.",
+  "license": "Apache-2.0",
+  "author": "Boostack",
+  "homepage": "https://github.com/boostack-co/sequentia-test-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/boostack-co/sequentia-test-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/boostack-co/sequentia-test-cli/issues"
+  },
+  "keywords": [
+    "sequentia",
+    "mcp",
+    "model-context-protocol",
+    "rag",
+    "knowledge-base",
+    "cli"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "sq-mcp": "sq-mcp.mjs"
+  },
+  "files": [
+    "sq-mcp.mjs",
+    "menu.mjs",
+    "commands.mjs",
+    "mcp-client.mjs",
+    "menu-smoke.mjs",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "node sq-mcp.mjs",
+    "tools": "node sq-mcp.mjs tools",
+    "kbs": "node sq-mcp.mjs list-kbs",
+    "smoke": "node menu-smoke.mjs 1 1 \"\" b q"
+  }
+}

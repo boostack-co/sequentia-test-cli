@@ -1,0 +1,16 @@
+# Secretos locales — NO COMMITEAR.
+# El .env lleva tu token de API (sk_live_...). Solo se versiona la plantilla.
+.env
+.env.*
+!.env.example
+
+# Dependencias (el proyecto no tiene, pero un npm install local las crearía)
+node_modules/
+package-lock.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
