@@ -1,6 +1,6 @@
 /**
  * Catálogo de comandos y utilidades compartidas por los dos frentes:
- * el CLI (`sq-mcp.mjs`) y el menú (`menu.mjs`).
+ * el CLI (`sq-test.mjs`) y el menú (`menu.mjs`).
  *
  * Vive en un módulo aparte por una razón concreta: el menú imprime el comando
  * equivalente a cada acción, y esa línea solo es confiable si ambos frentes
@@ -22,14 +22,14 @@ export class UsageError extends Error {}
 // Endpoint
 // ---------------------------------------------------------------------------
 /** El archivo de entrada del CLI. El comando reproducible siempre lo nombra a él. */
-const CLI_FILE = "sq-mcp.mjs";
+const CLI_FILE = "sq-test.mjs";
 
 /** El servidor MCP de Sequentia: el único endpoint que necesita un cliente. */
 export const DEFAULT_URL = "https://mcp.sequentia.co/mcp";
 
-/** Claves del `.env`. `SQ_MCP_URL` solo hace falta contra otro despliegue. */
-export const TOKEN_KEY = "SQ_MCP_TOKEN";
-export const URL_KEY = "SQ_MCP_URL";
+/** Claves del `.env`. `SQ_TEST_URL` solo hace falta contra otro despliegue. */
+export const TOKEN_KEY = "SQ_TEST_TOKEN";
+export const URL_KEY = "SQ_TEST_URL";
 
 // ---------------------------------------------------------------------------
 // Parser de .env
@@ -58,14 +58,14 @@ export function parseEnvFile(path) {
   return out;
 }
 
-/** Config del usuario, la que sobrevive a reinstalar: `~/.config/sq-mcp/.env`. */
-export const USER_ENV_FILE = join(homedir(), ".config", "sq-mcp", ".env");
+/** Config del usuario, la que sobrevive a reinstalar: `~/.config/sq-test/.env`. */
+export const USER_ENV_FILE = join(homedir(), ".config", "sq-test", ".env");
 
 /**
  * Dónde se busca el `.env`, de MENOR a MAYOR prioridad.
  *
  * Se **fusionan**, no se elige el primero que exista: si el directorio actual
- * tiene un `.env` de otro proyecto (sin claves `SQ_MCP_*`), no debe tapar la
+ * tiene un `.env` de otro proyecto (sin claves `SQ_TEST_*`), no debe tapar la
  * config del usuario y dejar el token "faltante".
  *
  * El directorio de instalación va último a propósito: con `npm install -g` cae
@@ -74,7 +74,7 @@ export const USER_ENV_FILE = join(homedir(), ".config", "sq-mcp", ".env");
  */
 export function envFileCandidates() {
   const files = [resolve(HERE, ".env"), USER_ENV_FILE, resolve(process.cwd(), ".env")];
-  if (process.env.SQ_MCP_ENV_FILE) files.push(resolve(process.env.SQ_MCP_ENV_FILE));
+  if (process.env.SQ_TEST_ENV_FILE) files.push(resolve(process.env.SQ_TEST_ENV_FILE));
   // Corriendo desde el repo, el directorio de instalación y el actual son el
   // mismo archivo: sin deduplicar se leía dos veces y se reportaba repetido.
   return [...new Set(files)];
@@ -103,7 +103,7 @@ export function resolveConfig(flags = {}) {
   if (!token) {
     throw new UsageError(
       "Falta la API key.\n" +
-        `  Corré  sq-mcp init  para crear ${USER_ENV_FILE}, y poné ahí ${TOKEN_KEY}.\n` +
+        `  Corré  sq-test init  para crear ${USER_ENV_FILE}, y poné ahí ${TOKEN_KEY}.\n` +
         `  También sirve exportar ${TOKEN_KEY} como variable de entorno, o pasar --token.` +
         (envFiles.length ? `\n  Config leída de: ${envFiles.join(", ")}` : "\n  (no se encontró ningún .env)"),
     );
@@ -559,16 +559,16 @@ function emitOption(parts, key, value) {
  * Con qué se invoca el CLI, para que el comando impreso se pueda pegar.
  *
  * Instalado con `npm install -g`, el script vive en `node_modules` y se lanza
- * por el shim `sq-mcp`: imprimir `node sq-mcp.mjs …` sería una ruta que no
- * existe en el directorio del usuario. Desde el repo, en cambio, `sq-mcp` no
- * está en el PATH y hay que decir `node sq-mcp.mjs`.
+ * por el shim `sq-test`: imprimir `node sq-test.mjs …` sería una ruta que no
+ * existe en el directorio del usuario. Desde el repo, en cambio, `sq-test` no
+ * está en el PATH y hay que decir `node sq-test.mjs`.
  *
- * `SQ_MCP_CMD` lo fuerza, por si alguna instalación no encaja en la heurística.
+ * `SQ_TEST_CMD` lo fuerza, por si alguna instalación no encaja en la heurística.
  */
 export function invocationPrefix() {
-  if (process.env.SQ_MCP_CMD) return process.env.SQ_MCP_CMD;
+  if (process.env.SQ_TEST_CMD) return process.env.SQ_TEST_CMD;
   const script = process.argv[1] ?? "";
-  if (script.includes("node_modules")) return "sq-mcp";
+  if (script.includes("node_modules")) return "sq-test";
   const base = basename(script);
   // Si nos lanzó el shim del PATH (sin extensión), ese es el nombre a imprimir.
   if (base && !base.endsWith(".mjs")) return base;
