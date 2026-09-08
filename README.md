@@ -4,7 +4,7 @@
 [![npm](https://img.shields.io/npm/v/sequentia-test-cli)](https://www.npmjs.com/package/sequentia-test-cli)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-Probá las capacidades de integración de [Sequentia](https://sequentia.co) desde la terminal, en minutos. Hoy cubre **MCP**; la **API** entra después.
+Probá las capacidades de integración de [Sequentia](https://sequentia.co) desde la terminal, en minutos. Cubre **MCP** completo, y el **carril API** (`/api/v1`) está en construcción: hoy llega hasta `api health`.
 
 ```bash
 npm install -g sequentia-test-cli
@@ -25,7 +25,7 @@ npm install -g sequentia-test-cli
 sq-test init
 ```
 
-`sq-test init` crea `~/.config/sq-test/.env`. Editalo y poné tu API key de Sequentia en `SQ_TEST_TOKEN`. Después, desde cualquier directorio:
+`sq-test init` crea `~/.config/sq-test/.env`. Editalo y poné tu API key de Sequentia en `SQ_TEST_TOKEN`; si vas a usar el carril API, poné también `SQ_TEST_API_URL`. Después, desde cualquier directorio:
 
 ```bash
 sq-test               # el menú
@@ -141,11 +141,49 @@ El modo de consulta por defecto es **`fast`**: el uso normal de este banco es ex
 
 La guarda va por **nombre de herramienta**, no por subcomando: `call verify_claim …` y `call record_decision …` piden `--yes` igual. No hay forma de gatillar un efecto secundario sin confirmarlo.
 
+## El carril API (`/api/v1`)
+
+El otro frente de integración de Sequentia: la REST que acepta API key. Entra por sesiones; hoy está el cliente y la primera petición.
+
+| Comando | Qué hace |
+| :--- | :--- |
+| `api health` | Comprueba que la celda responde. **No usa credencial.** |
+
+```bash
+node sq-test.mjs api health
+node sq-test.mjs api health --json | jq
+```
+
+**Son dos endpoints distintos, y ahí empiezan casi todos los problemas.** El de MCP (`SQ_TEST_URL`) suele ser el gateway universal, el mismo para todos. La API REST la sirve **tu celda**, así que `SQ_TEST_API_URL` es un host propio y no tiene default: un valor por defecto acá sería un host ajeno recibiendo tu API key como bearer token en cada petición.
+
+Se acepta **con y sin `/api/v1`**. No es una comodidad: cada ruta ya empieza con ese prefijo, así que pegar el base URL en la forma en que suele aparecer documentado daba `/api/v1/api/v1/…`, un 404 que se lee como un problema del despliegue y es de configuración.
+
+**`api health` va sin autenticar a propósito**, y por eso es el primer comando a correr: si falla, el problema es la URL y no la credencial. Cualquier otro orden hace que un token malo y un host mal copiado se vean igual.
+
+Los comandos `api` **no aceptan `--url`** —ese es el endpoint MCP— **ni `--raw`**: en REST el cuerpo *es* el payload y no hay sobre JSON-RPC que mostrar. Aceptarlos y no usarlos sería el mismo fallo silencioso que el CLI ya rechaza para los flags mal escritos.
+
+### Qué significa cada error
+
+La traducción de códigos es la mitad del valor del carril, porque varias causas distintas comparten status y el remedio de cada una es otro:
+
+| Código | Se distingue entre |
+| :--- | :--- |
+| `401` | falta la cabecera · el formato de la key no es `sk_live_…` · la key no existe |
+| `402` | el plan no incluye el módulo agéntico · **no hay créditos** · el workspace está suspendido |
+| `403` | falta un scope · la KB no está en la lista blanca de la key |
+| `404` | una KB inexistente y una de otro workspace **contestan igual**, a propósito |
+| `409` | la clave de idempotencia se usó antes con otro cuerpo (ventana de 24 h) |
+| `429` | dos techos con relojes distintos: el de la credencial y uno por IP en el borde |
+| `503` | el limitador caído fallando cerrado — **no** es que te hayan limitado |
+
+Y un caso que no es un código: un **`200` cuyo cuerpo no es JSON** se rechaza en vez de devolverse crudo. Suele significar que la URL no es la de la celda —un proxy o una landing contestando por ella—, y devolver el texto haría que el error apareciera mucho después disfrazado de «el servidor no trae el campo X».
+
 ### Opciones globales
 
 | Opción | Efecto |
 | :--- | :--- |
 | `--url <url>` | Endpoint MCP. Default `https://mcp.sequentia.co/mcp`; solo hace falta contra un despliegue propio. |
+| `--api-url <url>` | Origen directo de la celda para el carril API. Sin default. Solo lo aceptan los comandos `api`. |
 | `--token <tok>` | API key; pisa la del `.env`. |
 | `--json` | Payload des-anidado en JSON, apto para `jq`. |
 | `--raw` | Sobre JSON-RPC completo, para depurar el transporte. |
@@ -210,6 +248,7 @@ La referencia pública de las herramientas muestra ejemplos de `tools/call` suel
 | Archivo | Rol |
 | :--- | :--- |
 | `mcp-client.mjs` | `SequentiaMcpClient` — transporte reusable (handshake, SSE, sesión, reintentos, errores). Importable desde otros scripts. |
+| `api-client.mjs` | `SequentiaApiClient` — el transporte REST: sin sesión, con la taxonomía de errores del carril API. También importable. |
 | `sq-test.mjs` | El CLI: flags, subcomandos, formato, exit codes. |
 | `.env.example` | Plantilla de configuración. |
 
