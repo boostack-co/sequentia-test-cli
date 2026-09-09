@@ -46,9 +46,31 @@ const MCP_ITEMS = [
   "glossary",
   "context",
   "prefs",
+  // El 13. Va acá y no calculado: ver TOOLS_ITEM abajo.
+  "tools",
 ];
-/** `tools` no está en COMMANDS (no es una herramienta MCP sino tools/list). */
-const TOOLS_ITEM = MCP_ITEMS.length + 1;
+/**
+ * `tools` no está en COMMANDS: no es una herramienta MCP sino `tools/list`.
+ * Ocupa el número 13 y lo ocupa **por posición en la lista**, no por aritmética.
+ *
+ * Antes esto era `MCP_ITEMS.length + 1`, y ahí estaba el defecto: la herramienta
+ * número 13 habría movido `tools` de `1.13` a `1.14` **sola**, rompiendo el
+ * README y los guiones de `menu-smoke.mjs` —que son literalmente secuencias de
+ * números— sin que nadie tocara esta línea. Un número publicado que se mueve
+ * solo rompe en silencio, que es la peor forma de romper algo.
+ *
+ * Con la posición como fuente, agregar una herramienta al FINAL de `MCP_ITEMS`
+ * le da el 14 y deja `tools` donde estaba. Es lo que hace cierta la regla de
+ * append-only: los números del menú son contrato público.
+ */
+export const TOOLS_KEY = "tools";
+const TOOLS_ITEM = MCP_ITEMS.indexOf(TOOLS_KEY) + 1;
+if (TOOLS_ITEM === 0) throw new Error(`MCP_ITEMS debe incluir "${TOOLS_KEY}": es el ítem que lista las herramientas.`);
+
+/** Los números publicados del menú MCP, para que el CI pueda afirmarlos. */
+export const NUMEROS_MCP = Object.freeze(
+  Object.fromEntries(MCP_ITEMS.map((nombre, i) => [nombre, i + 1])),
+);
 
 class SalirDelMenu extends Error {}
 
@@ -280,7 +302,8 @@ function encabezado(sesion) {
 async function pantallaRaiz(rl, sesion) {
   encabezado(sesion);
   console.log("   0. Configuración");
-  console.log(`   1. MCP                     ${MCP_ITEMS.length + 1} funcionalidades`);
+  // La lista YA incluye `tools`, así que el `+ 1` de antes contaba uno de más.
+  console.log(`   1. MCP                     ${MCP_ITEMS.length} funcionalidades`);
   console.log("   2. API                     (próximamente)\n");
   console.log("   q. Salir");
   const op = (await rl.question("\n   > ")).trim().toLowerCase();
@@ -303,7 +326,6 @@ async function pantallaMcp(rl, sesion) {
     for (let i = 0; i < mitad; i++) {
       console.log(`   ${filaMcp(i)}${filaMcp(i + mitad)}`);
     }
-    console.log(`   ${etiquetaItem(TOOLS_ITEM, "Herramientas declaradas")}`);
     console.log("\n   ⚠ consumen crédito y escriben en el registro de auditoría\n");
     console.log("   b. Volver     q. Salir");
 
@@ -311,7 +333,7 @@ async function pantallaMcp(rl, sesion) {
     if (op === "q") throw new SalirDelMenu();
     if (op === "b" || op === "") return;
     const n = Number(/^1\.(\d+)$/.exec(op)?.[1] ?? op);
-    if (!Number.isInteger(n) || n < 1 || n > TOOLS_ITEM) {
+    if (!Number.isInteger(n) || n < 1 || n > MCP_ITEMS.length) {
       console.log("   ✗ opción inválida.");
       continue;
     }
@@ -323,6 +345,8 @@ async function pantallaMcp(rl, sesion) {
 function filaMcp(i) {
   if (i >= MCP_ITEMS.length) return "";
   const name = MCP_ITEMS[i];
+  // `tools` es parte de la numeración pero no de COMMANDS: es `tools/list`.
+  if (name === TOOLS_KEY) return etiquetaItem(i + 1, "Herramientas declaradas").padEnd(42);
   const cmd = COMMANDS[name];
   const marca = Object.hasOwn(SIDE_EFFECT_TOOLS, cmd.tool) ? " ⚠" : "";
   return etiquetaItem(i + 1, cmd.label + marca).padEnd(42);

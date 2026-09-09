@@ -61,6 +61,26 @@ jobs:
           set -e
           node sq-test.mjs --help > /dev/null
           echo "" | node sq-test.mjs > /dev/null || test $? -eq 2   # sin TTY: ayuda + 2
+          # Los numeros del menu son contrato publico: estan en el README y en
+          # los guiones de menu-smoke, que son literalmente secuencias de
+          # numeros. Renumerar rompe EN SILENCIO, asi que se afirman aca.
+          # Agregar una herramienta al final NO mueve nada y no toca esta lista;
+          # cualquier otra cosa la rompe, que es el punto.
+          node -e '
+            const esperado = ["list-kbs","query-kb","search","get-article","list-categories",
+              "verify-claim","check-freshness","canonical","record-decision","glossary",
+              "context","prefs","tools"];
+            import("./menu.mjs").then(({ NUMEROS_MCP }) => {
+              for (const [i, nombre] of esperado.entries()) {
+                const n = i + 1;
+                if (NUMEROS_MCP[nombre] !== n) {
+                  console.error(`::error::1.${n} deberia ser "${nombre}" y es "${Object.keys(NUMEROS_MCP).find(k => NUMEROS_MCP[k] === n)}"`);
+                  process.exit(1);
+                }
+              }
+              console.log(`OK: los ${esperado.length} numeros del menu MCP siguen donde estaban.`);
+            });
+          '
           # La deducción de `api doctor` es pura, así que se ejercita sin
           # credencial y sin red — incluida la rama que la colección de hoy no
           # alcanza. Un motivo mal asignado no falla, solo miente.
