@@ -4,12 +4,12 @@
 [![npm](https://img.shields.io/npm/v/sequentia-test-cli)](https://www.npmjs.com/package/sequentia-test-cli)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-Probá las capacidades de integración de [Sequentia](https://sequentia.co) desde la terminal, en minutos. Hoy cubre **MCP**; la **API** entra después.
+Probá las capacidades de integración de [Sequentia](https://sequentia.co) desde la terminal, en minutos. Cubre **MCP** completo, y el **carril API** (`/api/v1`) está en construcción: hoy llega hasta `api health`.
 
 ```bash
 npm install -g sequentia-test-cli
-sq-mcp init          # crea ~/.config/sq-mcp/.env — poné ahí tu API key
-sq-mcp               # el menú
+sq-test init          # crea ~/.config/sq-test/.env — poné ahí tu API key
+sq-test               # el menú
 ```
 
 Se usa de dos formas: un **menú interactivo** para explorar, y un **CLI** para scriptear. El menú imprime **el comando equivalente a cada acción y cuánto tardó**, así que se explora clickeando números y se sale sabiendo el comando exacto para automatizarlo.
@@ -22,21 +22,21 @@ Requiere Node >= 18.
 
 ```bash
 npm install -g sequentia-test-cli
-sq-mcp init
+sq-test init
 ```
 
-`sq-mcp init` crea `~/.config/sq-mcp/.env`. Editalo y poné tu API key de Sequentia en `SQ_MCP_TOKEN`. Después, desde cualquier directorio:
+`sq-test init` crea `~/.config/sq-test/.env`. Editalo y poné tu API key de Sequentia en `SQ_TEST_TOKEN`; si vas a usar el carril API, poné también `SQ_TEST_API_URL`. Después, desde cualquier directorio:
 
 ```bash
-sq-mcp               # el menú
-sq-mcp list-kbs      # el CLI
+sq-test               # el menú
+sq-test list-kbs      # el CLI
 ```
 
 ### En Windows
 
-El shim queda en `%APPDATA%\npm\sq-mcp` (con sus variantes `.cmd` y `.ps1`), directorio que npm ya deja en el PATH. Si `sq-mcp` no resuelve, reabrí la terminal.
+El shim queda en `%APPDATA%\npm\sq-test` (con sus variantes `.cmd` y `.ps1`), directorio que npm ya deja en el PATH. Si `sq-test` no resuelve, reabrí la terminal.
 
-Para actualizar, `npm update -g sequentia-test-cli`. Para desinstalar, `npm uninstall -g sequentia-test-cli` — **el `~/.config/sq-mcp/.env` sobrevive**, que es justamente el motivo de que la config no viva junto al código.
+Para actualizar, `npm update -g sequentia-test-cli`. Para desinstalar, `npm uninstall -g sequentia-test-cli` — **el `~/.config/sq-test/.env` sobrevive**, que es justamente el motivo de que la config no viva junto al código.
 
 ### Dónde busca la configuración
 
@@ -45,11 +45,11 @@ Se **fusionan**, de menor a mayor prioridad, y las variables de entorno del proc
 | Origen | Para qué |
 | :--- | :--- |
 | directorio de instalación `/.env` | compatibilidad con quien trabaje desde el repo |
-| `~/.config/sq-mcp/.env` | **la config del usuario**; sobrevive a reinstalar |
+| `~/.config/sq-test/.env` | **la config del usuario**; sobrevive a reinstalar |
 | `./.env` del directorio actual | pisar valores en un proyecto puntual |
-| `$SQ_MCP_ENV_FILE` | apuntar a un archivo específico |
+| `$SQ_TEST_ENV_FILE` | apuntar a un archivo específico |
 
-Se fusionan en vez de tomar el primero que exista a propósito: un `.env` ajeno en el directorio actual, sin claves `SQ_MCP_*`, no debe tapar tu config y dejarte sin token. Con `--verbose`, y en el mensaje de token faltante, se listan los archivos que se leyeron.
+Se fusionan en vez de tomar el primero que exista a propósito: un `.env` ajeno en el directorio actual, sin claves `SQ_TEST_*`, no debe tapar tu config y dejarte sin token. Con `--verbose`, y en el mensaje de token faltante, se listan los archivos que se leyeron.
 
 ### Desde el código (desarrollo)
 
@@ -57,16 +57,16 @@ Se fusionan en vez de tomar el primero que exista a propósito: un `.env` ajeno 
 git clone https://github.com/boostack-co/sequentia-test-cli.git
 cd sequentia-test-cli
 cp .env.example .env       # y poné tu token
-node sq-mcp.mjs
+node sq-test.mjs
 ```
 
-Corriendo así, los comandos que imprime el menú dicen `node sq-mcp.mjs …` en vez de `sq-mcp …`: se adapta a cómo lo invocaste, para que la línea siga siendo pegable.
+Corriendo así, los comandos que imprime el menú dicen `node sq-test.mjs …` en vez de `sq-test …`: se adapta a cómo lo invocaste, para que la línea siga siendo pegable.
 
 El `.env` **no se commitea** — el `.gitignore` lo cubre. Nunca lo agregues a la fuerza: tiene tu API key.
 
 ## El menú
 
-`node sq-mcp.mjs` sin argumentos abre el menú (requiere terminal; por pipe o redirección imprime la ayuda y sale con 2, para no colgar scripts).
+`node sq-test.mjs` sin argumentos abre el menú (requiere terminal; por pipe o redirección imprime la ayuda y sale con 2, para no colgar scripts).
 
 ```
   Test de Integraciones SEQUENTIA
@@ -84,7 +84,7 @@ Dentro de `1. MCP` están las 12 herramientas más `tools`, numeradas `1.1`…`1
 Cada acción se enmarca entre el comando y el tiempo:
 
 ```
-  $ node sq-mcp.mjs query-kb --kb devops-arquitectura --q 'Como monitoreo un Azure App Service' --mode fast --limit 2
+  $ node sq-test.mjs query-kb --kb devops-arquitectura --q 'Como monitoreo un Azure App Service' --mode fast --limit 2
   ────────────────────────────────────────────────────────────────────────
   Para monitorear un Azure App Service, …
   ────────────────────────────────────────────────────────────────────────
@@ -112,16 +112,18 @@ Gasta llamadas reales contra el endpoint configurado. **Sale con 1 si alguna acc
 ## Uso del CLI
 
 ```bash
-node sq-mcp.mjs <comando> [opciones]
-node sq-mcp.mjs --help
+node sq-test.mjs <comando> [opciones]
+node sq-test.mjs --help
 ```
 
 `--kb` acepta el **UUID o el slug/nombre** de la KB; si le das un slug lo resuelve solo contra `list_knowledge_bases`.
 
+El modo de consulta por defecto es **`fast`**: el uso normal de este banco es explorar, y ahí la latencia importa más que la profundidad — la diferencia contra `standard` es de varios segundos por consulta. Se envía explícitamente, así que el comando que ves es el que corre.
+
 | Comando | Herramienta MCP | Opciones |
 | :--- | :--- | :--- |
 | `list-kbs` | `list_knowledge_bases` | — |
-| `query-kb` | `query_knowledge_base` | `--kb --q [--mode fast\|standard\|precise] [--language] [--limit 1-20]` |
+| `query-kb` | `query_knowledge_base` | `--kb --q [--mode fast\|standard\|precise] [--language] [--limit 1-20]` · el modo por defecto es **`fast`** |
 | `search` | `search_articles` | `--kb --q [--category] [--status] [--limit 1-50]` |
 | `get-article` | `get_article` | `--kb` y `--id` **o** `--slug` |
 | `list-categories` | `list_categories` | `--kb` |
@@ -139,11 +141,55 @@ node sq-mcp.mjs --help
 
 La guarda va por **nombre de herramienta**, no por subcomando: `call verify_claim …` y `call record_decision …` piden `--yes` igual. No hay forma de gatillar un efecto secundario sin confirmarlo.
 
+## El carril API (`/api/v1`)
+
+El otro frente de integración de Sequentia: la REST que acepta API key. Entra por sesiones; hoy está el cliente y la primera petición.
+
+| Comando | Qué hace |
+| :--- | :--- |
+| `api health` | Comprueba que la celda responde. **No usa credencial.** |
+
+```bash
+node sq-test.mjs api health
+node sq-test.mjs api health --json | jq
+```
+
+**Son dos endpoints distintos, y ahí empiezan casi todos los problemas.** El de MCP (`SQ_TEST_URL`) suele ser el gateway universal, el mismo para todos. La API REST la sirve **tu celda**, así que `SQ_TEST_API_URL` es un host propio y no tiene default: un valor por defecto acá sería un host ajeno recibiendo tu API key como bearer token en cada petición.
+
+Se acepta **con y sin `/api/v1`**. No es una comodidad: cada ruta ya empieza con ese prefijo, así que pegar el base URL en la forma en que suele aparecer documentado daba `/api/v1/api/v1/…`, un 404 que se lee como un problema del despliegue y es de configuración.
+
+### La colección Postman
+
+En [`collection/`](collection/) vive la colección pública de la API, con su entorno. Es el mismo artefacto que un cliente importa para tocar la API en cinco minutos sin escribir código, y el que el CLI va a usar como **catálogo ejecutable**: un ejecutor genérico correrá cualquier petición que la colección declare.
+
+Cada petición lleva en su descripción un bloque `sq-test` legible por máquina con sus scopes, qué persiste y si gasta créditos — que es lo que después alimenta la guarda de `--yes`. Ver [`collection/README.md`](collection/README.md) para usarla y [`collection/PUBLISHING.md`](collection/PUBLISHING.md) para mantenerla.
+
+**`api health` va sin autenticar a propósito**, y por eso es el primer comando a correr: si falla, el problema es la URL y no la credencial. Cualquier otro orden hace que un token malo y un host mal copiado se vean igual.
+
+Los comandos `api` **no aceptan `--url`** —ese es el endpoint MCP— **ni `--raw`**: en REST el cuerpo *es* el payload y no hay sobre JSON-RPC que mostrar. Aceptarlos y no usarlos sería el mismo fallo silencioso que el CLI ya rechaza para los flags mal escritos.
+
+### Qué significa cada error
+
+La traducción de códigos es la mitad del valor del carril, porque varias causas distintas comparten status y el remedio de cada una es otro:
+
+| Código | Se distingue entre |
+| :--- | :--- |
+| `401` | falta la cabecera · el formato de la key no es `sk_live_…` · la key no existe |
+| `402` | el plan no incluye el módulo agéntico · **no hay créditos** · el workspace está suspendido |
+| `403` | falta un scope · la KB no está en la lista blanca de la key |
+| `404` | una KB inexistente y una de otro workspace **contestan igual**, a propósito |
+| `409` | la clave de idempotencia se usó antes con otro cuerpo (ventana de 24 h) |
+| `429` | dos techos con relojes distintos: el de la credencial y uno por IP en el borde |
+| `503` | el limitador caído fallando cerrado — **no** es que te hayan limitado |
+
+Y un caso que no es un código: un **`200` cuyo cuerpo no es JSON** se rechaza en vez de devolverse crudo. Suele significar que la URL no es la de la celda —un proxy o una landing contestando por ella—, y devolver el texto haría que el error apareciera mucho después disfrazado de «el servidor no trae el campo X».
+
 ### Opciones globales
 
 | Opción | Efecto |
 | :--- | :--- |
 | `--url <url>` | Endpoint MCP. Default `https://mcp.sequentia.co/mcp`; solo hace falta contra un despliegue propio. |
+| `--api-url <url>` | Origen directo de la celda para el carril API. Sin default. Solo lo aceptan los comandos `api`. |
 | `--token <tok>` | API key; pisa la del `.env`. |
 | `--json` | Payload des-anidado en JSON, apto para `jq`. |
 | `--raw` | Sobre JSON-RPC completo, para depurar el transporte. |
@@ -156,23 +202,23 @@ Los booleanos (`--json`, `--raw`, `--verbose`, `--yes`) no toman valor: se usan 
 
 `0` ok · `1` la herramienta devolvió `isError` · `2` uso o configuración · `3` transporte, auth o rate limit.
 
-Pensado para scriptear: `node.exe sq-mcp.mjs search --kb X --q Y --json | jq -r '.[].slug'`.
+Pensado para scriptear: `node.exe sq-test.mjs search --kb X --q Y --json | jq -r '.[].slug'`.
 
 > **En Git Bash interactivo usá `node.exe`, no `node`, cuando pipees.**
 > Git for Windows aliasea `node` a `winpty node.exe` en terminales mintty
 > (`/etc/profile.d/aliases.sh`), y `winpty` aborta con **`stdout is not a tty`**
 > apenas su salida va a un pipe en vez de a la consola. No es un problema del CLI.
 > Alternativas equivalentes: `command node`, `\node`, o `unalias node` en la sesión.
-> Sin pipe, `node sq-mcp.mjs ...` anda igual.
+> Sin pipe, `node sq-test.mjs ...` anda igual.
 
 ### Ejemplos
 
 ```bash
-node sq-mcp.mjs tools
-node sq-mcp.mjs query-kb --kb devops-arquitectura --q "Como monitoreo un App Service" --mode fast --limit 3
-node.exe sq-mcp.mjs search --kb kb-privada-python --q decorators --json | jq -r '.[].slug'
-node sq-mcp.mjs get-article --kb kb-privada-python --slug understanding-what-functions-are
-node sq-mcp.mjs call get_workspace_glossary '{}'
+node sq-test.mjs tools
+node sq-test.mjs query-kb --kb devops-arquitectura --q "Como monitoreo un App Service" --mode fast --limit 3
+node.exe sq-test.mjs search --kb kb-privada-python --q decorators --json | jq -r '.[].slug'
+node sq-test.mjs get-article --kb kb-privada-python --slug understanding-what-functions-are
+node sq-test.mjs call get_workspace_glossary '{}'
 ```
 
 ## Cómo funciona el servidor (verificado en vivo, no según la doc)
@@ -208,7 +254,9 @@ La referencia pública de las herramientas muestra ejemplos de `tools/call` suel
 | Archivo | Rol |
 | :--- | :--- |
 | `mcp-client.mjs` | `SequentiaMcpClient` — transporte reusable (handshake, SSE, sesión, reintentos, errores). Importable desde otros scripts. |
-| `sq-mcp.mjs` | El CLI: flags, subcomandos, formato, exit codes. |
+| `api-client.mjs` | `SequentiaApiClient` — el transporte REST: sin sesión, con la taxonomía de errores del carril API. También importable. |
+| `collection/` | La colección Postman pública y su entorno, más cómo se usa y cómo se mantiene. |
+| `sq-test.mjs` | El CLI: flags, subcomandos, formato, exit codes. |
 | `.env.example` | Plantilla de configuración. |
 
 ### Usarlo como librería
@@ -216,7 +264,7 @@ La referencia pública de las herramientas muestra ejemplos de `tools/call` suel
 ```js
 import { SequentiaMcpClient } from "./mcp-client.mjs";
 
-const client = new SequentiaMcpClient({ url: "https://mcp.sequentia.co/mcp", token: process.env.SQ_MCP_TOKEN });
+const client = new SequentiaMcpClient({ url: "https://mcp.sequentia.co/mcp", token: process.env.SQ_TEST_TOKEN });
 try {
   const { data } = await client.call("list_knowledge_bases", {});
   console.log(data); // ya des-anidado

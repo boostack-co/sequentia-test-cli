@@ -15,8 +15,8 @@ Node >= 18. **Cero dependencias**, y es a propósito: el proyecto usa solo `fetc
 ```bash
 git clone https://github.com/<tu-usuario>/sequentia-test-cli.git
 cd sequentia-test-cli
-npm install -g .     # deja el comando `sq-mcp`
-sq-mcp init          # crea ~/.config/sq-mcp/.env
+npm install -g .     # deja el comando `sq-test`
+sq-test init          # crea ~/.config/sq-test/.env
 ```
 
 ## Cómo verificar un cambio
@@ -29,13 +29,13 @@ node menu-smoke.mjs 1 1 "" b q
 node menu-smoke.mjs 1 2 1 "una pregunta" fast 2 "" b q
 
 # el CLI
-node sq-mcp.mjs tools
-node sq-mcp.mjs list-kbs --json | jq .
+node sq-test.mjs tools
+node sq-test.mjs list-kbs --json | jq .
 
 # y los casos que deben FALLAR, que son los que prueban el diseño
-node sq-mcp.mjs verify-claim --kb <kb> --claim x            # exit 2, se niega
-node sq-mcp.mjs query-kb --kb <kb> --q hola --mdo precise   # exit 2, flag desconocido
-node sq-mcp.mjs list-categories --kb 00000000-0000-0000-0000-000000000000  # exit 1
+node sq-test.mjs verify-claim --kb <kb> --claim x            # exit 2, se niega
+node sq-test.mjs query-kb --kb <kb> --q hola --mdo precise   # exit 2, flag desconocido
+node sq-test.mjs list-categories --kb 00000000-0000-0000-0000-000000000000  # exit 1
 ```
 
 `menu-smoke.mjs` sale con **1** si alguna acción falló. Un caso negativo que devuelve el exit code equivocado es un bug.

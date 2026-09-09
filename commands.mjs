@@ -1,6 +1,6 @@
 /**
  * Catálogo de comandos y utilidades compartidas por los dos frentes:
- * el CLI (`sq-mcp.mjs`) y el menú (`menu.mjs`).
+ * el CLI (`sq-test.mjs`) y el menú (`menu.mjs`).
  *
  * Vive en un módulo aparte por una razón concreta: el menú imprime el comando
  * equivalente a cada acción, y esa línea solo es confiable si ambos frentes
@@ -12,6 +12,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeApiBase } from "./api-client.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -22,14 +23,36 @@ export class UsageError extends Error {}
 // Endpoint
 // ---------------------------------------------------------------------------
 /** El archivo de entrada del CLI. El comando reproducible siempre lo nombra a él. */
-const CLI_FILE = "sq-mcp.mjs";
+const CLI_FILE = "sq-test.mjs";
 
 /** El servidor MCP de Sequentia: el único endpoint que necesita un cliente. */
 export const DEFAULT_URL = "https://mcp.sequentia.co/mcp";
 
-/** Claves del `.env`. `SQ_MCP_URL` solo hace falta contra otro despliegue. */
-export const TOKEN_KEY = "SQ_MCP_TOKEN";
-export const URL_KEY = "SQ_MCP_URL";
+/**
+ * Modo de consulta por defecto. El servidor usa `standard` si no se manda
+ * nada; este banco manda `fast` explicitamente porque su uso normal es
+ * explorar, y ahi la latencia importa mas que la profundidad. Se envia de
+ * verdad (no es solo un texto en el prompt), asi que el comando impreso y
+ * lo que corre coinciden.
+ */
+export const DEFAULT_MODE = "fast";
+
+/** Modos que acepta query_knowledge_base. */
+export const QUERY_MODES = ["fast", "standard", "precise"];
+
+/** Claves del `.env`. `SQ_TEST_URL` solo hace falta contra otro despliegue. */
+export const TOKEN_KEY = "SQ_TEST_TOKEN";
+export const URL_KEY = "SQ_TEST_URL";
+
+/**
+ * El origen de la celda para el carril REST (`/api/v1`).
+ *
+ * No tiene default, y no es un olvido: el endpoint MCP es un gateway universal
+ * —el mismo para todos—, pero la API REST se sirve desde la celda del cliente,
+ * así que no hay ningún valor razonable que poner. Un default acá sería un host
+ * ajeno recibiendo tu API key como bearer token.
+ */
+export const API_URL_KEY = "SQ_TEST_API_URL";
 
 // ---------------------------------------------------------------------------
 // Parser de .env
@@ -58,14 +81,14 @@ export function parseEnvFile(path) {
   return out;
 }
 
-/** Config del usuario, la que sobrevive a reinstalar: `~/.config/sq-mcp/.env`. */
-export const USER_ENV_FILE = join(homedir(), ".config", "sq-mcp", ".env");
+/** Config del usuario, la que sobrevive a reinstalar: `~/.config/sq-test/.env`. */
+export const USER_ENV_FILE = join(homedir(), ".config", "sq-test", ".env");
 
 /**
  * Dónde se busca el `.env`, de MENOR a MAYOR prioridad.
  *
  * Se **fusionan**, no se elige el primero que exista: si el directorio actual
- * tiene un `.env` de otro proyecto (sin claves `SQ_MCP_*`), no debe tapar la
+ * tiene un `.env` de otro proyecto (sin claves `SQ_TEST_*`), no debe tapar la
  * config del usuario y dejar el token "faltante".
  *
  * El directorio de instalación va último a propósito: con `npm install -g` cae
@@ -74,7 +97,7 @@ export const USER_ENV_FILE = join(homedir(), ".config", "sq-mcp", ".env");
  */
 export function envFileCandidates() {
   const files = [resolve(HERE, ".env"), USER_ENV_FILE, resolve(process.cwd(), ".env")];
-  if (process.env.SQ_MCP_ENV_FILE) files.push(resolve(process.env.SQ_MCP_ENV_FILE));
+  if (process.env.SQ_TEST_ENV_FILE) files.push(resolve(process.env.SQ_TEST_ENV_FILE));
   // Corriendo desde el repo, el directorio de instalación y el actual son el
   // mismo archivo: sin deduplicar se leía dos veces y se reportaba repetido.
   return [...new Set(files)];
@@ -103,12 +126,58 @@ export function resolveConfig(flags = {}) {
   if (!token) {
     throw new UsageError(
       "Falta la API key.\n" +
-        `  Corré  sq-mcp init  para crear ${USER_ENV_FILE}, y poné ahí ${TOKEN_KEY}.\n` +
+        `  Corré  sq-test init  para crear ${USER_ENV_FILE}, y poné ahí ${TOKEN_KEY}.\n` +
         `  También sirve exportar ${TOKEN_KEY} como variable de entorno, o pasar --token.` +
         (envFiles.length ? `\n  Config leída de: ${envFiles.join(", ")}` : "\n  (no se encontró ningún .env)"),
     );
   }
   return { url, token, envFiles };
+}
+
+/**
+ * Config del carril REST. Se resuelve aparte de `resolveConfig` a propósito:
+ * son dos endpoints distintos, y exigir el de la API para correr un comando MCP
+ * (o al revés) obligaría a configurar algo que ese comando no usa.
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.requireToken] `api health` corre sin credencial, que es
+ *   justamente lo que lo vuelve el primer diagnóstico: si falla, es la URL.
+ */
+export function resolveApiConfig(flags = {}, { requireToken = true } = {}) {
+  const { values: dotenv, files: envFiles } = loadDotenv();
+  const pick = (key) => process.env[key] ?? dotenv[key];
+
+  const raw = flags["api-url"] ?? pick(API_URL_KEY);
+  if (!raw) {
+    throw new UsageError(
+      "Falta la URL de la celda para el carril API.\n" +
+        `  Poné ${API_URL_KEY} en ${USER_ENV_FILE}, exportala, o pasá --api-url.\n` +
+        "  Es el origen DIRECTO de tu celda (algo como https://f1-t1-g01-c001.sequentia.co),\n" +
+        "  sin barra final y sin /api/v1: cada ruta ya lo agrega.\n" +
+        `  No es el endpoint MCP (${URL_KEY}), que suele ser otro host.` +
+        (envFiles.length ? `\n  Config leída de: ${envFiles.join(", ")}` : "\n  (no se encontró ningún .env)"),
+    );
+  }
+
+  let apiUrl;
+  try {
+    apiUrl = normalizeApiBase(raw);
+  } catch (err) {
+    // Una URL ilegible es un error de configuración (exit 2), no de transporte:
+    // no se llegó a hablar con nadie.
+    throw new UsageError(`${API_URL_KEY} no sirve: ${err.message}`);
+  }
+
+  const token = flags.token ?? pick(TOKEN_KEY) ?? null;
+  if (requireToken && !token) {
+    throw new UsageError(
+      "Falta la API key.\n" +
+        `  Corré  sq-test init  para crear ${USER_ENV_FILE}, y poné ahí ${TOKEN_KEY}.\n` +
+        `  También sirve exportar ${TOKEN_KEY} como variable de entorno, o pasar --token.` +
+        (envFiles.length ? `\n  Config leída de: ${envFiles.join(", ")}` : "\n  (no se encontró ningún .env)"),
+    );
+  }
+  return { apiUrl, token, envFiles };
 }
 
 /**
@@ -123,6 +192,11 @@ export function plantillaEnv() {
     "",
     "# Tu API key de Sequentia.",
     `${TOKEN_KEY}=`,
+    "",
+    "# El origen DIRECTO de tu celda, para el carril API (/api/v1).",
+    "# Sin barra final y sin /api/v1: cada ruta ya lo agrega.",
+    "# No es el endpoint MCP de abajo: suele ser otro host.",
+    `${API_URL_KEY}=`,
     "",
     "# Opcional: solo si apuntás a un despliegue propio de Sequentia.",
     `# ${URL_KEY}=${DEFAULT_URL}`,
@@ -341,18 +415,18 @@ export const COMMANDS = {
     tool: "query_knowledge_base",
     label: "Consultar una KB (RAG)",
     opts: ["kb", "q", "mode", "language", "limit"],
-    help: "Consulta una KB por RAG.  --kb --q [--mode fast|standard|precise] [--language] [--limit 1-20]",
+    help: "Consulta una KB por RAG.  --kb --q [--mode fast|standard|precise, default fast] [--language] [--limit 1-20]",
     needsKb: true,
     prompts: [
       { opt: "kb", label: "Knowledge base", kind: "kb", required: true },
       { opt: "q", label: "Pregunta", required: true, maxLen: 2000 },
-      { opt: "mode", label: "Modo", choices: ["fast", "standard", "precise"], default: "standard" },
+      { opt: "mode", label: "Modo", choices: QUERY_MODES, default: DEFAULT_MODE },
       { opt: "limit", label: "Fuentes", range: [1, 20], default: 5 },
       { opt: "language", label: "Idioma", hint: "en, es… (Enter para omitir)" },
     ],
     build: (flags, kbId) =>
       put(
-        put(put({ knowledgeBaseId: kbId, question: maxLen(required(flags, "q", "la pregunta"), 2000, "q") }, "mode", oneOf(flags, "mode", ["fast", "standard", "precise"])), "language", flags.language),
+        put(put({ knowledgeBaseId: kbId, question: maxLen(required(flags, "q", "la pregunta"), 2000, "q") }, "mode", oneOf(flags, "mode", QUERY_MODES) ?? DEFAULT_MODE), "language", flags.language),
         "limit",
         intInRange(flags, "limit", 1, 20),
       ),
@@ -559,16 +633,16 @@ function emitOption(parts, key, value) {
  * Con qué se invoca el CLI, para que el comando impreso se pueda pegar.
  *
  * Instalado con `npm install -g`, el script vive en `node_modules` y se lanza
- * por el shim `sq-mcp`: imprimir `node sq-mcp.mjs …` sería una ruta que no
- * existe en el directorio del usuario. Desde el repo, en cambio, `sq-mcp` no
- * está en el PATH y hay que decir `node sq-mcp.mjs`.
+ * por el shim `sq-test`: imprimir `node sq-test.mjs …` sería una ruta que no
+ * existe en el directorio del usuario. Desde el repo, en cambio, `sq-test` no
+ * está en el PATH y hay que decir `node sq-test.mjs`.
  *
- * `SQ_MCP_CMD` lo fuerza, por si alguna instalación no encaja en la heurística.
+ * `SQ_TEST_CMD` lo fuerza, por si alguna instalación no encaja en la heurística.
  */
 export function invocationPrefix() {
-  if (process.env.SQ_MCP_CMD) return process.env.SQ_MCP_CMD;
+  if (process.env.SQ_TEST_CMD) return process.env.SQ_TEST_CMD;
   const script = process.argv[1] ?? "";
-  if (script.includes("node_modules")) return "sq-mcp";
+  if (script.includes("node_modules")) return "sq-test";
   const base = basename(script);
   // Si nos lanzó el shim del PATH (sin extensión), ese es el nombre a imprimir.
   if (base && !base.endsWith(".mjs")) return base;

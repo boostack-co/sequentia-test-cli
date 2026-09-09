@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 /**
- * sq-mcp — frente de línea de comandos del Test de Integraciones SEQUENTIA.
+ * sq-test — frente de línea de comandos del Test de Integraciones SEQUENTIA.
  *
- *   node sq-mcp.mjs                  # sin argumentos abre el menú interactivo
- *   node sq-mcp.mjs list-kbs
- *   node sq-mcp.mjs query-kb --kb devops-arquitectura --q "..." --mode fast
- *   node sq-mcp.mjs call search_articles '{"knowledgeBaseId":"...","query":"..."}'
+ *   node sq-test.mjs                  # sin argumentos abre el menú interactivo
+ *   node sq-test.mjs list-kbs
+ *   node sq-test.mjs query-kb --kb devops-arquitectura --q "..." --mode fast
+ *   node sq-test.mjs call search_articles '{"knowledgeBaseId":"...","query":"..."}'
+ *   node sq-test.mjs api health      # el otro carril: REST /api/v1, otro host
  *
  * El catálogo de comandos vive en commands.mjs, compartido con el menú.
  * Ver README.md. Exit codes: 0 ok · 1 la herramienta devolvió isError ·
@@ -14,9 +15,11 @@
 
 import { stdin, stdout } from "node:process";
 import { SequentiaMcpClient, McpToolError, McpTransportError } from "./mcp-client.mjs";
+import { SequentiaApiClient, ApiTransportError } from "./api-client.mjs";
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import {
+  API_URL_KEY,
   COMMANDS,
   DEFAULT_URL,
   PLACEHOLDER_KB_ID,
@@ -30,6 +33,7 @@ import {
   plantillaEnv,
   printPretty,
   printTable,
+  resolveApiConfig,
   resolveConfig,
   resolveKbId,
 } from "./commands.mjs";
@@ -65,6 +69,24 @@ const GLOBAL_FLAGS = new Set([...BOOLEAN_FLAGS, "url", "token"]);
  * silencioso que ya cerramos para los flags mal escritos.
  */
 const MENU_FLAGS = new Set(["url", "token", "verbose"]);
+
+/**
+ * Lo que tiene sentido en el carril API. Deliberadamente NO incluye `--url`,
+ * que es el endpoint MCP, ni `--raw`, que es el sobre JSON-RPC: en REST el
+ * cuerpo ES el payload y no hay sobre que mostrar. Aceptar cualquiera de los
+ * dos sería el mismo fallo silencioso que ya cerramos para los flags mal
+ * escritos, solo que peor: `--url` daría la impresión de estar apuntando a otra
+ * celda cuando en realidad no se estaría usando.
+ */
+const API_FLAGS = new Set(["json", "verbose", "help", "api-url", "token"]);
+
+/** Subcomandos del carril API. Crece de a una sesión de la épica por vez. */
+const API_SUBCOMMANDS = {
+  health: {
+    help: "Comprueba que la celda responde. NO usa credencial: si falla, el problema es la URL.",
+    opts: [],
+  },
+};
 
 /**
  * Rechaza opciones que el comando no conoce. Sin esto, un `--mdo precise` se
@@ -153,20 +175,24 @@ function parseArgs(argv) {
 function usage() {
   const width = Math.max(...Object.keys(COMMANDS).map((k) => k.length), "call <tool>".length, "tools".length);
   const rows = Object.entries(COMMANDS).map(([name, cmd]) => `  ${name.padEnd(width)}  ${cmd.help}`);
+  const apiRows = Object.entries(API_SUBCOMMANDS).map(([name, sub]) => `  ${`api ${name}`.padEnd(width)}  ${sub.help}`);
   // La ayuda usa el mismo prefijo que los comandos impresos: instalado dice
-  // `sq-mcp`, desde el repo dice `node sq-mcp.mjs`.
+  // `sq-test`, desde el repo dice `node sq-test.mjs`.
   const cmd = invocationPrefix();
-  return `sq-mcp — Test de Integraciones SEQUENTIA
+  return `sq-test — Test de Integraciones SEQUENTIA
 
 USO
   ${cmd}${" ".repeat(Math.max(1, 34 - cmd.length))}abre el menú interactivo
   ${cmd} [opciones globales] <comando> [opciones del comando]
 
-COMANDOS
+COMANDOS (MCP)
 ${rows.join("\n")}
-  ${"init".padEnd(width)}  Crea la configuración del usuario (~/.config/sq-mcp/.env).
+  ${"init".padEnd(width)}  Crea la configuración del usuario (~/.config/sq-test/.env).
   ${"tools".padEnd(width)}  Lista las herramientas que el servidor declara de verdad.
   ${"call <tool>".padEnd(width)}  Escotilla genérica: ${cmd} call <tool> '<json-args>'
+
+COMANDOS (API REST)
+${apiRows.join("\n")}
 
 OPCIONES GLOBALES
   --url <url>     Endpoint MCP (default: ${DEFAULT_URL}).
@@ -177,17 +203,24 @@ OPCIONES GLOBALES
   --yes           Confirma las herramientas con efectos secundarios.
   --help, -h      Esta ayuda.
 
+OPCIONES DEL CARRIL API
+  --api-url <url> Origen directo de la celda; pisa el ${API_URL_KEY} del .env.
+  Los comandos "api" no aceptan --url (es el endpoint MCP) ni --raw (en REST
+  el cuerpo es el payload: no hay sobre que mostrar).
+
 NOTAS
   --kb acepta el UUID o el slug/nombre de la KB (se resuelve solo).
-  La API key sale de ~/.config/sq-mcp/.env (SQ_MCP_TOKEN);
-  creá ese archivo con  sq-mcp init  . También se leen ./.env y \$SQ_MCP_ENV_FILE.
+  La API key sale de ~/.config/sq-test/.env (SQ_TEST_TOKEN);
+  creá ese archivo con  sq-test init  . También se leen ./.env y \$SQ_TEST_ENV_FILE.
+  El carril API usa ${API_URL_KEY}: el origen DIRECTO de tu celda, que suele ser
+  un host distinto del endpoint MCP.
 
 EXIT CODES
   0 ok · 1 la herramienta devolvió isError · 2 uso/config · 3 transporte/auth`;
 }
 
 /**
- * `sq-mcp init` — crea la config del usuario. Es lo que vuelve usable una
+ * `sq-test init` — crea la config del usuario. Es lo que vuelve usable una
  * instalación global: con `npm install -g` el paquete queda en node_modules,
  * que no es lugar para dejar un token ni sobrevive a una actualización.
  *
@@ -207,8 +240,63 @@ function comandoInit() {
   }
 
   if (files.length) console.log(`\nArchivos de config que se están leyendo: ${files.join(", ")}`);
-  console.log("\nDespués, para probar:  sq-mcp tools");
+  console.log("\nDespués, para probar:  sq-test tools");
   return EXIT_OK;
+}
+
+/**
+ * `sq-test api <subcomando>` — el carril REST.
+ *
+ * Va por su propio camino y no toca el cliente MCP: son transportes distintos,
+ * contra hosts distintos, y `api health` ni siquiera necesita credencial. Meter
+ * esto en el flujo de arriba obligaría a abrir una sesión MCP —gastando uno de
+ * los cinco cupos de la credencial— para una petición que no la usa.
+ */
+async function comandoApi(flags, positional) {
+  const cmd = invocationPrefix();
+  const disponibles = Object.keys(API_SUBCOMMANDS);
+  const sub = positional[1];
+
+  if (!sub) {
+    throw new UsageError(`Uso: ${cmd} api <subcomando>. Disponibles: ${disponibles.join(", ")}.`);
+  }
+  // Object.hasOwn por lo mismo que en el catálogo MCP: `api hasOwnProperty` no
+  // debe resolver a la función heredada del prototipo.
+  if (!Object.hasOwn(API_SUBCOMMANDS, sub)) {
+    throw new UsageError(`Subcomando de api desconocido: "${sub}". Disponibles: ${disponibles.join(", ")}.`);
+  }
+  const spec = API_SUBCOMMANDS[sub];
+  assertKnownFlags(flags, spec.opts, `api ${sub}`, API_FLAGS);
+  assertPositionals(positional, 2, `api ${sub}`, `${cmd} api ${sub}`);
+
+  const onDebug = flags.verbose ? (msg) => console.error(`[sq-test] ${msg}`) : null;
+
+  if (sub === "health") {
+    // Sin token a propósito: es lo que hace que un fallo acá señale la URL.
+    const { apiUrl } = resolveApiConfig(flags, { requireToken: false });
+    if (onDebug) onDebug(`celda ${apiUrl}`);
+    const client = new SequentiaApiClient({ baseUrl: apiUrl, onDebug });
+
+    const t0 = performance.now();
+    const { status, data } = await client.health();
+    const ms = performance.now() - t0;
+
+    if (flags.json) {
+      // La invariante vale igual acá: bajo --json, stdout lleva JSON válido y
+      // nada más. El tiempo es narración y va por stderr.
+      console.log(JSON.stringify(data, null, 2));
+      console.error(`${status} · ${formatMs(ms)}`);
+    } else {
+      printPretty(data);
+      console.log(`\n${status} · ${formatMs(ms)} · ${apiUrl}`);
+    }
+    return EXIT_OK;
+  }
+
+  // Inalcanzable mientras el catálogo y este switch estén sincronizados; si
+  // alguien agrega una entrada y olvida el caso, que se note acá y no con un
+  // `undefined` más adelante.
+  throw new UsageError(`El subcomando "${sub}" está declarado pero no implementado.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -229,7 +317,7 @@ async function main() {
     // nunca llega.
     if (stdin.isTTY && stdout.isTTY) {
       // Los flags de configuración se le pasan al menú. Descartarlos hacía que
-      // `sq-mcp --url <otro>` abriera un menú apuntando al endpoint default:
+      // `sq-test --url <otro>` abriera un menú apuntando al endpoint default:
       // una opción ignorada en silencio, con acciones que cobran crédito.
       assertKnownFlags(flags, [], "el menú", MENU_FLAGS);
       const { correrMenu } = await import("./menu.mjs");
@@ -245,8 +333,14 @@ async function main() {
   // hay config, así que no puede exigirla.
   if (commandName === "init") {
     assertKnownFlags(flags, [], "init", new Set());
-    assertPositionals(positional, 1, "init", "sq-mcp init");
+    assertPositionals(positional, 1, "init", "sq-test init");
     return comandoInit();
+  }
+
+  // El carril API va antes de resolver la config MCP: usa otro endpoint, otra
+  // resolución, y `api health` no necesita credencial.
+  if (commandName === "api") {
+    return await comandoApi(flags, positional);
   }
 
   const isCall = commandName === "call";
@@ -261,7 +355,7 @@ async function main() {
   }
 
   const { url, token } = resolveConfig(flags);
-  const onDebug = flags.verbose ? (msg) => console.error(`[sq-mcp] ${msg}`) : null;
+  const onDebug = flags.verbose ? (msg) => console.error(`[sq-test] ${msg}`) : null;
   if (onDebug) onDebug(`endpoint ${url}`);
 
   const client = new SequentiaMcpClient({ url, token, onDebug });
@@ -270,7 +364,7 @@ async function main() {
     // --- tools: lo que el servidor declara realmente ---
     if (isTools) {
       assertKnownFlags(flags, [], "tools");
-      assertPositionals(positional, 1, "tools", "node sq-mcp.mjs tools");
+      assertPositionals(positional, 1, "tools", "node sq-test.mjs tools");
       const { tools, envelope } = await client.listTools();
       if (flags.raw) {
         // --raw es el sobre JSON-RPC; --json, el payload des-anidado. Antes los
@@ -297,9 +391,9 @@ async function main() {
     if (isCall) {
       // `call` no toma opciones propias: los argumentos van en el JSON posicional.
       assertKnownFlags(flags, [], "call");
-      assertPositionals(positional, 3, "call", "node sq-mcp.mjs call <tool> '<json-args>'");
+      assertPositionals(positional, 3, "call", "node sq-test.mjs call <tool> '<json-args>'");
       toolName = positional[1];
-      if (!toolName) throw new UsageError("Uso: node sq-mcp.mjs call <tool> '<json-args>'");
+      if (!toolName) throw new UsageError("Uso: node sq-test.mjs call <tool> '<json-args>'");
       const rawArgs = positional[2] ?? "{}";
       try {
         args = JSON.parse(rawArgs);
@@ -313,7 +407,7 @@ async function main() {
       toolName = command.tool;
       printer = command.print;
       assertKnownFlags(flags, command.opts ?? [], commandName);
-      assertPositionals(positional, 1, commandName, `node sq-mcp.mjs ${commandName} [opciones]`);
+      assertPositionals(positional, 1, commandName, `node sq-test.mjs ${commandName} [opciones]`);
     }
 
     // La guarda va acá, por NOMBRE DE HERRAMIENTA, para que `call verify_claim`
@@ -378,7 +472,7 @@ try {
     if (parsedFlags.raw && err.envelope) console.log(JSON.stringify(err.envelope, null, 2));
     console.error(`La herramienta ${err.tool} devolvió un error:\n  ${err.message}`);
     process.exitCode = EXIT_TOOL_ERROR;
-  } else if (err instanceof McpTransportError) {
+  } else if (err instanceof McpTransportError || err instanceof ApiTransportError) {
     console.error(`Error de transporte: ${err.message}`);
     if (err.wwwAuthenticate) console.error(`  WWW-Authenticate: ${err.wwwAuthenticate}`);
     if (err.body) console.error(`  Respuesta: ${String(err.body).slice(0, 500)}`);

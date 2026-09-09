@@ -1,6 +1,6 @@
 {
   "name": "sequentia-test-cli",
-  "version": "1.1.0",
+  "version": "2.1.0",
   "type": "module",
   "description": "Test de Integraciones SEQUENTIA — menú y CLI para el servidor MCP.",
   "license": "Apache-2.0",
@@ -25,20 +25,21 @@
     "node": ">=18"
   },
   "bin": {
-    "sq-mcp": "sq-mcp.mjs"
+    "sq-test": "sq-test.mjs"
   },
   "files": [
-    "sq-mcp.mjs",
+    "sq-test.mjs",
     "menu.mjs",
     "commands.mjs",
     "mcp-client.mjs",
+    "api-client.mjs",
     "menu-smoke.mjs",
     "README.md"
   ],
   "scripts": {
-    "start": "node sq-mcp.mjs",
-    "tools": "node sq-mcp.mjs tools",
-    "kbs": "node sq-mcp.mjs list-kbs",
+    "start": "node sq-test.mjs",
+    "tools": "node sq-test.mjs tools",
+    "kbs": "node sq-test.mjs list-kbs",
     "smoke": "node menu-smoke.mjs 1 1 \"\" b q"
   }
 }

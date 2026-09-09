@@ -16,4 +16,4 @@ Si el problema es del **servicio Sequentia** y no de este cliente, reportalo por
 
 ## Alcance
 
-Esta herramienta habla con el servidor MCP de Sequentia usando tu credencial. No guarda nada más que la configuración que vos creás en `~/.config/sq-mcp/.env`, no envía telemetría, y no tiene dependencias de terceros — la superficie de ataque es el código de este repo y el runtime de Node.
+Esta herramienta habla con el servidor MCP de Sequentia usando tu credencial. No guarda nada más que la configuración que vos creás en `~/.config/sq-test/.env`, no envía telemetría, y no tiene dependencias de terceros — la superficie de ataque es el código de este repo y el runtime de Node.

@@ -59,8 +59,8 @@ jobs:
         shell: bash
         run: |
           set -e
-          node sq-mcp.mjs --help > /dev/null
-          echo "" | node sq-mcp.mjs > /dev/null || test $? -eq 2   # sin TTY: ayuda + 2
+          node sq-test.mjs --help > /dev/null
+          echo "" | node sq-test.mjs > /dev/null || test $? -eq 2   # sin TTY: ayuda + 2
 
       - name: Casos que deben fallar (y con qué código)
         shell: bash
@@ -68,7 +68,7 @@ jobs:
           # A propósito NO tiene la forma de una key real: si la tuviera, el
           # job `secretos` de arriba fallaría sobre este mismo archivo.
           # `resolveConfig` solo valida que haya token, no que sirva.
-          SQ_MCP_TOKEN: clave-de-prueba-del-ci-no-sirve
+          SQ_TEST_TOKEN: clave-de-prueba-del-ci-no-sirve
         run: |
           esperar() {
             local esperado="$1"; shift
@@ -78,16 +78,27 @@ jobs:
             fi
             echo "ok  $esperado  $*"
           }
-          esperar 2 node sq-mcp.mjs comando-que-no-existe
-          esperar 2 node sq-mcp.mjs list-kbs --json=quizas
-          esperar 2 node sq-mcp.mjs query-kb --kb x --q -v
-          esperar 2 node sq-mcp.mjs query-kb --kb x --q Y mode precise
-          esperar 2 node sq-mcp.mjs query-kb --kb x --q hola --mdo precise
-          esperar 2 node sq-mcp.mjs verify-claim --kb x --claim y
-          esperar 2 node sq-mcp.mjs verify-claim --kb x --claim y --yes=false
-          esperar 2 node sq-mcp.mjs call verify_claim '{}'
-          esperar 2 node sq-mcp.mjs hasOwnProperty
-          esperar 2 node sq-mcp.mjs call get_user_preferences '{}' sobra
+          esperar 2 node sq-test.mjs comando-que-no-existe
+          esperar 2 node sq-test.mjs list-kbs --json=quizas
+          esperar 2 node sq-test.mjs query-kb --kb x --q -v
+          esperar 2 node sq-test.mjs query-kb --kb x --q Y mode precise
+          esperar 2 node sq-test.mjs query-kb --kb x --q hola --mdo precise
+          esperar 2 node sq-test.mjs verify-claim --kb x --claim y
+          esperar 2 node sq-test.mjs verify-claim --kb x --claim y --yes=false
+          esperar 2 node sq-test.mjs call verify_claim '{}'
+          esperar 2 node sq-test.mjs hasOwnProperty
+          esperar 2 node sq-test.mjs call get_user_preferences '{}' sobra
+
+          # Carril API. Ninguno toca la red: fallan en el parseo o en la config.
+          esperar 2 node sq-test.mjs api                                  # falta el subcomando
+          esperar 2 node sq-test.mjs api nada                             # subcomando inexistente
+          esperar 2 node sq-test.mjs api hasOwnProperty                   # y tampoco por el prototipo
+          esperar 2 node sq-test.mjs api health sobra                     # posicional de más
+          esperar 2 node sq-test.mjs api health --raw                     # en REST no hay sobre que mostrar
+          esperar 2 node sq-test.mjs api health --url https://x.invalid   # --url es el endpoint MCP
+          esperar 2 node sq-test.mjs api health --json=quizas             # booleano con valor inválido
+          esperar 2 node sq-test.mjs api health --api-url no-es-una-url   # URL ilegible = config, no transporte
+          esperar 2 node sq-test.mjs api health                           # falta SQ_TEST_API_URL
 
       - name: init crea la config del usuario
         shell: bash
@@ -95,13 +106,13 @@ jobs:
           export HOME="$RUNNER_TEMP/fakehome"
           export USERPROFILE="$HOME"
           mkdir -p "$HOME"
-          node sq-mcp.mjs init
-          test -f "$HOME/.config/sq-mcp/.env" || { echo "::error::init no creó el archivo"; exit 1; }
-          grep -q "SQ_MCP_TOKEN=" "$HOME/.config/sq-mcp/.env"
+          node sq-test.mjs init
+          test -f "$HOME/.config/sq-test/.env" || { echo "::error::init no creó el archivo"; exit 1; }
+          grep -q "SQ_TEST_TOKEN=" "$HOME/.config/sq-test/.env"
           echo "OK: init crea la config."
 
       - name: Se instala como comando global
         shell: bash
         run: |
           npm install -g .
-          sq-mcp --help | head -1
+          sq-test --help | head -1

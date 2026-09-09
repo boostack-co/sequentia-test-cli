@@ -18,7 +18,7 @@
  */
 
 export const PROTOCOL_VERSION = "2025-06-18";
-const CLIENT_INFO = { name: "sq-mcp-cli", version: "1.0.0" };
+const CLIENT_INFO = { name: "sq-test-cli", version: "1.0.0" };
 
 /** Intentos de DELETE por sesión: el 400/404 suele ser ruteo, no inexistencia. */
 const DELETE_ATTEMPTS = 3;
