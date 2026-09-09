@@ -4,7 +4,7 @@
 [![npm](https://img.shields.io/npm/v/sequentia-test-cli)](https://www.npmjs.com/package/sequentia-test-cli)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-Probá las capacidades de integración de [Sequentia](https://sequentia.co) desde la terminal, en minutos. Cubre **MCP** completo, y el **carril API** (`/api/v1`) está en construcción: hoy llega hasta `api health`.
+Probá las capacidades de integración de [Sequentia](https://sequentia.co) desde la terminal, en minutos. Cubre **MCP** completo, y el **carril API** (`/api/v1`) ya corre cualquier petición de su colección.
 
 ```bash
 npm install -g sequentia-test-cli
@@ -148,11 +148,25 @@ El otro frente de integración de Sequentia: la REST que acepta API key. Entra p
 | Comando | Qué hace |
 | :--- | :--- |
 | `api health` | Comprueba que la celda responde. **No usa credencial.** |
+| `api list` | Lista lo que declara la colección: scopes, qué escribe y qué cuesta. Tampoco usa credencial ni red. |
+| `api run '<nombre>'` | Corre cualquier petición de la colección. `[--var clave=valor] [--yes]` |
 
 ```bash
 node sq-test.mjs api health
-node sq-test.mjs api health --json | jq
+node sq-test.mjs api list
+node sq-test.mjs api run 'List knowledge bases' --json | jq
+node sq-test.mjs api run 'Get knowledge base' --var kbId=<uuid>
 ```
+
+### El ejecutor genérico
+
+`api run` es al carril REST lo que `call <tool>` es al MCP: **la colección son datos**, así que agregar un endpoint no requiere tocar el CLI. El nombre se puede dar completo (`Agent API / 1. Retrieve`), solo el de la petición (`1. Retrieve`) o como fragmento; si coincide con varias, **no elige por vos** — las enumera. En un banco de pruebas correr otra cosa de la que se pidió invalida el experimento, y acá hay peticiones que escriben.
+
+Tres guardas corren **antes de cualquier red**:
+
+- **`--yes` sale de la metadata de la petición**, no de una lista mantenida a mano. Una petición nueva que persiste o gasta créditos **nace protegida**.
+- **Una variable sin resolver es un error de uso.** Sin eso, un `{{kbId}}` viaja como texto literal dentro de la ruta y lo que devuelve el servidor se lee como un fallo suyo.
+- **`baseUrl` y `apiKey` no se pueden pasar con `--var`.** El host sale de `SQ_TEST_API_URL` y el token de `SQ_TEST_TOKEN`; que no puedan venir de otro lado es lo que impide que una colección —o un comando pegado— mande tu API key a un servidor ajeno.
 
 **Son dos endpoints distintos, y ahí empiezan casi todos los problemas.** El de MCP (`SQ_TEST_URL`) suele ser el gateway universal, el mismo para todos. La API REST la sirve **tu celda**, así que `SQ_TEST_API_URL` es un host propio y no tiene default: un valor por defecto acá sería un host ajeno recibiendo tu API key como bearer token en cada petición.
 
@@ -255,6 +269,7 @@ La referencia pública de las herramientas muestra ejemplos de `tools/call` suel
 | :--- | :--- |
 | `mcp-client.mjs` | `SequentiaMcpClient` — transporte reusable (handshake, SSE, sesión, reintentos, errores). Importable desde otros scripts. |
 | `api-client.mjs` | `SequentiaApiClient` — el transporte REST: sin sesión, con la taxonomía de errores del carril API. También importable. |
+| `catalog.mjs` | Lee la colección y la convierte en el catálogo que el CLI ejecuta. Es donde se descarta el host y donde se lee qué escribe cada petición. |
 | `collection/` | La colección Postman pública y su entorno, más cómo se usa y cómo se mantiene. |
 | `sq-test.mjs` | El CLI: flags, subcomandos, formato, exit codes. |
 | `.env.example` | Plantilla de configuración. |

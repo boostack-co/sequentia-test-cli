@@ -16,6 +16,15 @@
 import { stdin, stdout } from "node:process";
 import { SequentiaMcpClient, McpToolError, McpTransportError } from "./mcp-client.mjs";
 import { SequentiaApiClient, ApiTransportError } from "./api-client.mjs";
+import {
+  CatalogError,
+  VARIABLES_RESERVADAS,
+  buscarPeticion,
+  cargarCatalogo,
+  efectosDe,
+  necesitaConfirmacion,
+  resolverPeticion,
+} from "./catalog.mjs";
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import {
@@ -60,6 +69,16 @@ const SHORT_FLAGS = new Map([
   ["-v", "verbose"],
 ]);
 
+/**
+ * Opciones que se pueden repetir y se acumulan en un array.
+ *
+ * Sin esto, `--var kb=X --var art=Y` guardaba solo la última: una opción
+ * aceptada que no se usa, que es el fallo silencioso que el CLI rechaza en
+ * todas partes. La lista es explícita a propósito — el resto de las opciones
+ * sigue siendo de valor único, y repetir una es un error de uso.
+ */
+const REPEATABLE_FLAGS = new Set(["var"]);
+
 /** Opciones válidas en cualquier comando. Las propias de cada uno van en `opts`. */
 const GLOBAL_FLAGS = new Set([...BOOLEAN_FLAGS, "url", "token"]);
 
@@ -85,6 +104,19 @@ const API_SUBCOMMANDS = {
   health: {
     help: "Comprueba que la celda responde. NO usa credencial: si falla, el problema es la URL.",
     opts: [],
+    posicionales: 2,
+  },
+  list: {
+    help: "Lista lo que declara la colección: scopes, qué escribe y qué cuesta.",
+    opts: [],
+    posicionales: 2,
+  },
+  run: {
+    help: "Corre cualquier petición de la colección:  api run \'<nombre>\' [--var k=v]",
+    // `--yes` solo acá: es el único subcomando que puede disparar un efecto.
+    opts: ["var", "yes"],
+    // `api run <nombre>` son tres: el comando, el subcomando y la petición.
+    posicionales: 3,
   },
 };
 
@@ -123,6 +155,15 @@ function looksLikeFlag(token) {
 function parseArgs(argv) {
   const flags = {};
   const positional = [];
+  /** Guarda un valor, acumulando si la opción es de las que se repiten. */
+  const guardar = (name, value) => {
+    if (!REPEATABLE_FLAGS.has(name)) {
+      flags[name] = value;
+      return;
+    }
+    if (!Array.isArray(flags[name])) flags[name] = [];
+    flags[name].push(value);
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
 
@@ -155,7 +196,7 @@ function parseArgs(argv) {
     }
 
     if (eq !== -1) {
-      flags[name] = arg.slice(eq + 1);
+      guardar(name, arg.slice(eq + 1));
       continue;
     }
 
@@ -166,7 +207,7 @@ function parseArgs(argv) {
     if (next === undefined || looksLikeFlag(next)) {
       throw new UsageError(`La opción --${name} necesita un valor (si el valor empieza con "-", usá --${name}=<valor>)`);
     }
-    flags[name] = next;
+    guardar(name, next);
     i++;
   }
   return { flags, positional };
@@ -245,6 +286,37 @@ function comandoInit() {
 }
 
 /**
+ * Convierte los `--var clave=valor` en un objeto.
+ *
+ * Rechaza las variables reservadas, y ese rechazo es la invariante del carril
+ * llevada al borde del CLI: el host y el token salen de la config del usuario,
+ * nunca de la colección **ni de la línea de comando disfrazada de variable**.
+ * Sin esto, `--var baseUrl=https://otro` sería una forma de redirigir una API
+ * key sin que se note en ningún lado.
+ */
+function parseVars(lista) {
+  const out = {};
+  for (const item of lista ?? []) {
+    const texto = String(item);
+    const eq = texto.indexOf("=");
+    if (eq <= 0) {
+      throw new UsageError(`--var espera clave=valor (recibí "${texto}")`);
+    }
+    const clave = texto.slice(0, eq).trim();
+    if (VARIABLES_RESERVADAS.has(clave)) {
+      throw new UsageError(
+        `"${clave}" no se puede pasar con --var.\n` +
+          `  El host sale de ${API_URL_KEY} o de --api-url, y el token de ${TOKEN_KEY} o de --token.\n` +
+          `  Que no puedan venir de otro lado es lo que impide que una colección —o un comando pegado— ` +
+          `mande tu API key a un servidor ajeno.`,
+      );
+    }
+    out[clave] = texto.slice(eq + 1);
+  }
+  return out;
+}
+
+/**
  * `sq-test api <subcomando>` — el carril REST.
  *
  * Va por su propio camino y no toca el cliente MCP: son transportes distintos,
@@ -267,7 +339,11 @@ async function comandoApi(flags, positional) {
   }
   const spec = API_SUBCOMMANDS[sub];
   assertKnownFlags(flags, spec.opts, `api ${sub}`, API_FLAGS);
-  assertPositionals(positional, 2, `api ${sub}`, `${cmd} api ${sub}`);
+  const forma = sub === "run" ? `${cmd} api run '<nombre>' [--var clave=valor]` : `${cmd} api ${sub}`;
+  assertPositionals(positional, spec.posicionales, `api ${sub}`, forma);
+  if (sub === "run" && !positional[2]) {
+    throw new UsageError(`Falta el nombre de la petición.\n  Forma esperada: ${forma}\n  Vela con:  ${cmd} api list`);
+  }
 
   const onDebug = flags.verbose ? (msg) => console.error(`[sq-test] ${msg}`) : null;
 
@@ -289,6 +365,75 @@ async function comandoApi(flags, positional) {
     } else {
       printPretty(data);
       console.log(`\n${status} · ${formatMs(ms)} · ${apiUrl}`);
+    }
+    return EXIT_OK;
+  }
+
+  if (sub === "list") {
+    // No necesita credencial ni red: la colección viaja en el paquete. Es el
+    // análogo REST de `tools`, salvo que `tools` pregunta al servidor y esto
+    // lee lo que el cliente trae — la deriva entre ambos la caza S9.
+    const { entradas } = cargarCatalogo();
+    const filas = [...entradas.values()];
+
+    if (flags.json) {
+      console.log(JSON.stringify(filas.map((e) => ({ ...e, variables: [...e.variables] })), null, 2));
+      return EXIT_OK;
+    }
+
+    printTable(filas, [
+      { header: "PETICIÓN", get: (e) => e.nombre },
+      { header: "MÉTODO", get: (e) => e.metodo },
+      { header: "SCOPES", get: (e) => e.scopes.join(" | ") || "—" },
+      { header: "EFECTOS", get: (e) => efectosDe(e) },
+    ]);
+    const escriben = filas.filter((e) => e.persists).length;
+    const gastan = filas.filter((e) => e.spendsCredits).length;
+    console.log(`\n${filas.length} peticiones · ${escriben} escriben · ${gastan} gastan créditos.`);
+    console.log(`Para correr una:  ${cmd} api run '<nombre>'`);
+    return EXIT_OK;
+  }
+
+  if (sub === "run") {
+    const { entradas, coleccion } = cargarCatalogo();
+    const entrada = buscarPeticion(entradas, positional[2]);
+    const vars = parseVars(flags.var);
+
+    // La guarda va ANTES de resolver variables y antes de cualquier red, y sale
+    // de la metadata de la propia petición: una petición nueva que escribe o
+    // cuesta nace protegida, sin que nadie tenga que acordarse de agregarla a
+    // una lista. Es la misma promesa que SIDE_EFFECT_TOOLS da en el carril MCP.
+    if (necesitaConfirmacion(entrada) && !flags.yes) {
+      const que = [entrada.persists && `persiste ${entrada.persists}`, entrada.spendsCredits && "gasta créditos de IA"]
+        .filter(Boolean)
+        .join(" y ");
+      throw new UsageError(
+        `"${entrada.nombre}" ${que}.\n  Volvé a correrlo con --yes si querés hacerlo de verdad.`,
+      );
+    }
+
+    // Resolver antes de pedir la config: una variable faltante es un error de
+    // uso, y tiene que verse aunque todavía no haya celda configurada.
+    const peticion = resolverPeticion(entrada, vars, coleccion);
+
+    const { apiUrl, token } = resolveApiConfig(flags, { requireToken: entrada.auth });
+    if (onDebug) onDebug(`celda ${apiUrl} · ${peticion.metodo} ${peticion.ruta}`);
+    const client = new SequentiaApiClient({ baseUrl: apiUrl, token, onDebug });
+
+    const t0 = performance.now();
+    const { status, data } = await client.request(peticion.metodo, peticion.ruta, {
+      body: peticion.body,
+      auth: peticion.auth,
+      headers: peticion.cabeceras,
+    });
+    const ms = performance.now() - t0;
+
+    if (flags.json) {
+      console.log(JSON.stringify(data, null, 2));
+      console.error(`${status} · ${formatMs(ms)}`);
+    } else {
+      printPretty(data);
+      console.log(`\n${status} · ${formatMs(ms)} · ${peticion.metodo} ${peticion.ruta}`);
     }
     return EXIT_OK;
   }
@@ -463,7 +608,7 @@ let parsedFlags = {};
 try {
   process.exitCode = await main();
 } catch (err) {
-  if (err instanceof UsageError) {
+  if (err instanceof UsageError || err instanceof CatalogError) {
     console.error(`Error: ${err.message}`);
     process.exitCode = EXIT_USAGE;
   } else if (err instanceof McpToolError) {
