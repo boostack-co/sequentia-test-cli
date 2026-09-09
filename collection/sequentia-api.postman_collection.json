@@ -30,17 +30,6 @@
             "description": "Comprueba que la celda responde. **No usa credencial**, así que un fallo acá señala `baseUrl` y no `apiKey`. Corré ésta primero, siempre.\n\n```sq-test\n{\"scopes\":[],\"auth\":false,\"persists\":null,\"spendsCredits\":false}\n```"
           },
           "response": []
-        },
-        {
-          "name": "Health (vector)",
-          "request": {
-            "method": "GET",
-            "auth": { "type": "noauth" },
-            "header": [{ "key": "Accept", "value": "application/json" }],
-            "url": { "raw": "{{baseUrl}}/api/v1/health/vector", "host": ["{{baseUrl}}"], "path": ["api", "v1", "health", "vector"] },
-            "description": "Estado del almacenamiento vectorial, que es de lo que depende toda recuperación. Tampoco lleva credencial.\n\n```sq-test\n{\"scopes\":[],\"auth\":false,\"persists\":null,\"spendsCredits\":false}\n```"
-          },
-          "response": []
         }
       ]
     },

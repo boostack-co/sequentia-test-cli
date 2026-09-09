@@ -279,6 +279,8 @@ node sq-test.mjs api loop --kb <slug> --json "…" | jq       # un solo valor JS
 
 El modelo es **tuyo**: este CLI no trae ninguno. El shape es el `/chat/completions` de OpenAI, que cubre vLLM, Ollama, LM Studio, OpenRouter y OpenAI directo tal cual. **Azure queda afuera a propósito** — necesita `endpoint`, `apiVersion` y `deployment`, y fingir que anda sería peor que decir que no está.
 
+Se pide `temperature: 0`, porque el bucle decide sobre lo que el modelo escribió y una corrida que no se puede repetir no se puede auditar. Los **modelos de razonamiento lo rechazan** con un `400` —la familia `o*` de OpenAI, y desde `gpt-5.5` también la principal—, así que si el servidor lo rechaza se reintenta una vez sin el parámetro. El precio no se paga en silencio: el paso `generar` de la traza lleva `temperatura: null` y la narración dice `SIN temperature:0, no reproducible`. El reintento pide **dos** condiciones, un `400` **y** que el mensaje nombre el parámetro: un `400` por otra cosa —un modelo que no existe, un cuerpo mal formado— se reporta tal cual, en vez de gastar una segunda llamada para volver a fallar igual con el motivo real tapado.
+
 **Sin framework de agentes**, y no por ascetismo: un framework resuelve selección no determinista de herramientas, y este bucle es lineal y fijo, así que no habría nada que orquestar. Lo caro de acá —los contratos, la política, la traza— ningún framework lo trae, y un framework lo esconde.
 
 #### Una sola cifra de política

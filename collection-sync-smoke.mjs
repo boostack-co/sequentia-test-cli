@@ -55,6 +55,7 @@ async function sirviendo(cuerpo, fn, { status = 200, tipo = "application/json" }
   try {
     return await fn(`http://127.0.0.1:${srv.address().port}/coleccion.json`);
   } finally {
+    srv.closeAllConnections?.();
     await new Promise((ok) => srv.close(ok));
   }
 }
@@ -244,4 +245,6 @@ await falla(
 rmSync(SANDBOX, { recursive: true, force: true });
 
 console.log(fallos ? `\n${fallos} fallos` : "\nTodo en verde.");
-process.exit(fallos ? 1 : 0);
+// `exitCode` y no `process.exit()`: con un servidor http de por medio, salir a
+// la fuerza puede agarrar un handle a medio cerrar y hacer abortar a libuv.
+process.exitCode = fallos ? 1 : 0;
