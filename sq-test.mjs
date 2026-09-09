@@ -16,10 +16,41 @@
 import { stdin, stdout } from "node:process";
 import { SequentiaMcpClient, McpToolError, McpTransportError } from "./mcp-client.mjs";
 import { SequentiaApiClient, ApiTransportError } from "./api-client.mjs";
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { diagnosticar, formatearInforme } from "./doctor.mjs";
+import { CACHE_FILE, SyncError, catalogoDe, comparar, formatearDerivas, guardarCache, traerPublicada } from "./collection-sync.mjs";
+import {
+  MANAGED_MAX_RESULTS,
+  MAX_SEND_RISK,
+  resolveLlmConfig,
+  ContractError,
+  LlmError,
+  correrBucle,
+  decisionDe,
+  narrar,
+} from "./loop.mjs";
+import {
+  AGENT_COMMANDS,
+  RETRIEVAL_TTL_MS,
+  RETRIEVE_MAX_RESULTS,
+  agentNecesitaConfirmacion,
+  claveIdempotencia,
+  recordarRetrieval,
+} from "./agent.mjs";
+import {
+  CatalogError,
+  VARIABLES_RESERVADAS,
+  buscarPeticion,
+  cargarCatalogo,
+  efectosDe,
+  necesitaConfirmacion,
+  resolverPeticion,
+} from "./catalog.mjs";
+import { mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import {
   API_URL_KEY,
+  COLLECTION_URL_KEY,
   COMMANDS,
   DEFAULT_URL,
   PLACEHOLDER_KB_ID,
@@ -27,7 +58,9 @@ import {
   TOKEN_KEY,
   USER_ENV_FILE,
   UsageError,
+  buildCommandLine,
   formatMs,
+  intInRange,
   invocationPrefix,
   loadDotenv,
   plantillaEnv,
@@ -35,6 +68,7 @@ import {
   printTable,
   resolveApiConfig,
   resolveConfig,
+  required,
   resolveKbId,
 } from "./commands.mjs";
 
@@ -46,7 +80,7 @@ const EXIT_TRANSPORT = 3;
 // ---------------------------------------------------------------------------
 // Parser de argumentos
 // ---------------------------------------------------------------------------
-const BOOLEAN_FLAGS = new Set(["json", "raw", "verbose", "yes", "help"]);
+const BOOLEAN_FLAGS = new Set(["json", "raw", "verbose", "yes", "help", "check", "refresh", "no-generate", "managed", "show-evidence"]);
 
 /**
  * Alias cortos. Son booleanos: nunca pueden ser el valor de otra opción.
@@ -59,6 +93,16 @@ const SHORT_FLAGS = new Map([
   ["-h", "help"],
   ["-v", "verbose"],
 ]);
+
+/**
+ * Opciones que se pueden repetir y se acumulan en un array.
+ *
+ * Sin esto, `--var kb=X --var art=Y` guardaba solo la última: una opción
+ * aceptada que no se usa, que es el fallo silencioso que el CLI rechaza en
+ * todas partes. La lista es explícita a propósito — el resto de las opciones
+ * sigue siendo de valor único, y repetir una es un error de uso.
+ */
+const REPEATABLE_FLAGS = new Set(["var"]);
 
 /** Opciones válidas en cualquier comando. Las propias de cada uno van en `opts`. */
 const GLOBAL_FLAGS = new Set([...BOOLEAN_FLAGS, "url", "token"]);
@@ -85,6 +129,35 @@ const API_SUBCOMMANDS = {
   health: {
     help: "Comprueba que la celda responde. NO usa credencial: si falla, el problema es la URL.",
     opts: [],
+    posicionales: 2,
+  },
+  list: {
+    help: "Lista lo que declara la colección: scopes, qué escribe y qué cuesta.",
+    opts: [],
+    posicionales: 2,
+  },
+  doctor: {
+    help: "Perfila la credencial: qué scopes tiene y dónde se consigue lo que falta.",
+    opts: [],
+    posicionales: 2,
+  },
+  collection: {
+    help: "Contrasta la colección empaquetada con la publicada:  api collection --check [--refresh]",
+    opts: ["check", "refresh"],
+    posicionales: 2,
+  },
+  loop: {
+    help: "El bucle: recuperar -> generar con TU modelo -> verificar -> decidir.  --kb \'<pregunta>\'",
+    opts: ["kb", "max-results", "max-send-risk", "no-generate", "managed", "show-evidence", "llm-url", "llm-key", "llm-model"],
+    // `api loop '<pregunta>'` son tres: comando, subcomando y pregunta.
+    posicionales: 3,
+  },
+  run: {
+    help: "Corre cualquier petición de la colección:  api run \'<nombre>\' [--var k=v]",
+    // `--yes` solo acá: es el único subcomando que puede disparar un efecto.
+    opts: ["var", "yes"],
+    // `api run <nombre>` son tres: el comando, el subcomando y la petición.
+    posicionales: 3,
   },
 };
 
@@ -123,6 +196,15 @@ function looksLikeFlag(token) {
 function parseArgs(argv) {
   const flags = {};
   const positional = [];
+  /** Guarda un valor, acumulando si la opción es de las que se repiten. */
+  const guardar = (name, value) => {
+    if (!REPEATABLE_FLAGS.has(name)) {
+      flags[name] = value;
+      return;
+    }
+    if (!Array.isArray(flags[name])) flags[name] = [];
+    flags[name].push(value);
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
 
@@ -155,7 +237,7 @@ function parseArgs(argv) {
     }
 
     if (eq !== -1) {
-      flags[name] = arg.slice(eq + 1);
+      guardar(name, arg.slice(eq + 1));
       continue;
     }
 
@@ -166,16 +248,26 @@ function parseArgs(argv) {
     if (next === undefined || looksLikeFlag(next)) {
       throw new UsageError(`La opción --${name} necesita un valor (si el valor empieza con "-", usá --${name}=<valor>)`);
     }
-    flags[name] = next;
+    guardar(name, next);
     i++;
   }
   return { flags, positional };
 }
 
 function usage() {
-  const width = Math.max(...Object.keys(COMMANDS).map((k) => k.length), "call <tool>".length, "tools".length);
+  // El ancho incluye los comandos del carril API: `api index-status` es más
+  // largo que cualquier comando MCP, y calcularlo sin ellos desalinea la ayuda.
+  const width = Math.max(
+    ...Object.keys(COMMANDS).map((k) => k.length),
+    ...[...Object.keys(API_SUBCOMMANDS), ...Object.keys(AGENT_COMMANDS)].map((k) => k.length + 4),
+    "call <tool>".length,
+    "tools".length,
+  );
   const rows = Object.entries(COMMANDS).map(([name, cmd]) => `  ${name.padEnd(width)}  ${cmd.help}`);
-  const apiRows = Object.entries(API_SUBCOMMANDS).map(([name, sub]) => `  ${`api ${name}`.padEnd(width)}  ${sub.help}`);
+  const apiRows = [
+    ...Object.entries(API_SUBCOMMANDS).map(([name, sub]) => `  ${`api ${name}`.padEnd(width)}  ${sub.help}`),
+    ...Object.entries(AGENT_COMMANDS).map(([name, sub]) => `  ${`api ${name}`.padEnd(width)}  ${sub.help}`),
+  ];
   // La ayuda usa el mismo prefijo que los comandos impresos: instalado dice
   // `sq-test`, desde el repo dice `node sq-test.mjs`.
   const cmd = invocationPrefix();
@@ -245,6 +337,37 @@ function comandoInit() {
 }
 
 /**
+ * Convierte los `--var clave=valor` en un objeto.
+ *
+ * Rechaza las variables reservadas, y ese rechazo es la invariante del carril
+ * llevada al borde del CLI: el host y el token salen de la config del usuario,
+ * nunca de la colección **ni de la línea de comando disfrazada de variable**.
+ * Sin esto, `--var baseUrl=https://otro` sería una forma de redirigir una API
+ * key sin que se note en ningún lado.
+ */
+function parseVars(lista) {
+  const out = {};
+  for (const item of lista ?? []) {
+    const texto = String(item);
+    const eq = texto.indexOf("=");
+    if (eq <= 0) {
+      throw new UsageError(`--var espera clave=valor (recibí "${texto}")`);
+    }
+    const clave = texto.slice(0, eq).trim();
+    if (VARIABLES_RESERVADAS.has(clave)) {
+      throw new UsageError(
+        `"${clave}" no se puede pasar con --var.\n` +
+          `  El host sale de ${API_URL_KEY} o de --api-url, y el token de ${TOKEN_KEY} o de --token.\n` +
+          `  Que no puedan venir de otro lado es lo que impide que una colección —o un comando pegado— ` +
+          `mande tu API key a un servidor ajeno.`,
+      );
+    }
+    out[clave] = texto.slice(eq + 1);
+  }
+  return out;
+}
+
+/**
  * `sq-test api <subcomando>` — el carril REST.
  *
  * Va por su propio camino y no toca el cliente MCP: son transportes distintos,
@@ -254,7 +377,7 @@ function comandoInit() {
  */
 async function comandoApi(flags, positional) {
   const cmd = invocationPrefix();
-  const disponibles = Object.keys(API_SUBCOMMANDS);
+  const disponibles = [...Object.keys(API_SUBCOMMANDS), ...Object.keys(AGENT_COMMANDS)];
   const sub = positional[1];
 
   if (!sub) {
@@ -262,12 +385,34 @@ async function comandoApi(flags, positional) {
   }
   // Object.hasOwn por lo mismo que en el catálogo MCP: `api hasOwnProperty` no
   // debe resolver a la función heredada del prototipo.
-  if (!Object.hasOwn(API_SUBCOMMANDS, sub)) {
+  const esAgente = Object.hasOwn(AGENT_COMMANDS, sub);
+  if (!esAgente && !Object.hasOwn(API_SUBCOMMANDS, sub)) {
     throw new UsageError(`Subcomando de api desconocido: "${sub}". Disponibles: ${disponibles.join(", ")}.`);
   }
-  const spec = API_SUBCOMMANDS[sub];
-  assertKnownFlags(flags, spec.opts, `api ${sub}`, API_FLAGS);
-  assertPositionals(positional, 2, `api ${sub}`, `${cmd} api ${sub}`);
+  const spec = esAgente ? AGENT_COMMANDS[sub] : API_SUBCOMMANDS[sub];
+  // `--yes` solo se acepta donde puede hacer algo: en los comandos del carril
+  // que escriben o cuestan. Aceptarlo en `api verify` sin usarlo sería la misma
+  // opción-que-no-se-usa que el CLI rechaza en todas partes.
+  const opts = esAgente && agentNecesitaConfirmacion(spec) ? [...spec.opts, "yes"] : spec.opts;
+  // Antes del chequeo genérico: un flag que existe en OTRO comando del carril
+  // merece decir por qué no vale acá. Después, `assertKnownFlags` lo tomaría
+  // como desconocido y el motivo real no se vería nunca.
+  for (const [flag, motivo] of Object.entries(spec.rechaza ?? {})) {
+    if (flags[flag] !== undefined) throw new UsageError(motivo);
+  }
+  assertKnownFlags(flags, opts, `api ${sub}`, API_FLAGS);
+  const FORMAS = {
+    run: `${cmd} api run '<nombre>' [--var clave=valor]`,
+    loop: `${cmd} api loop --kb <slug> '<pregunta>'`,
+  };
+  const forma = FORMAS[sub] ?? `${cmd} api ${sub}`;
+  assertPositionals(positional, spec.posicionales ?? 2, `api ${sub}`, forma);
+  if (sub === "loop" && !positional[2]) {
+    throw new UsageError(`Falta la pregunta.\n  Forma esperada: ${cmd} api loop --kb <slug> '<pregunta>'`);
+  }
+  if (sub === "run" && !positional[2]) {
+    throw new UsageError(`Falta el nombre de la petición.\n  Forma esperada: ${forma}\n  Vela con:  ${cmd} api list`);
+  }
 
   const onDebug = flags.verbose ? (msg) => console.error(`[sq-test] ${msg}`) : null;
 
@@ -289,6 +434,303 @@ async function comandoApi(flags, positional) {
     } else {
       printPretty(data);
       console.log(`\n${status} · ${formatMs(ms)} · ${apiUrl}`);
+    }
+    return EXIT_OK;
+  }
+
+  if (esAgente) {
+    // La guarda va primero y antes de cualquier config: `api gap-report` sin
+    // --yes tiene que decir eso, no "falta la URL de la celda".
+    if (agentNecesitaConfirmacion(spec) && !flags.yes) {
+      const que = [spec.persists && `persiste ${spec.persists}`, spec.spendsCredits && "gasta créditos de IA"]
+        .filter(Boolean)
+        .join(" y ");
+      throw new UsageError(`"api ${sub}" ${que}.\n  Volvé a correrlo con --yes si querés hacerlo de verdad.`);
+    }
+
+    const { apiUrl, token } = resolveApiConfig(flags);
+    // El cuerpo se arma DESPUÉS de conocer la celda porque `feedback` valida
+    // contra ella el retrievalId recordado: un id de otra celda no identifica
+    // nada acá.
+    const body = spec.build(flags, { celda: apiUrl });
+    const ruta = typeof spec.ruta === "function" ? spec.ruta(flags) : spec.ruta;
+
+    const cabeceras = {};
+    if (spec.idempotencia && body !== undefined) {
+      // Derivada del cuerpo entero: reintentar lo mismo deduplica, y mandar
+      // algo distinto es otra observación. Una clave más estrecha daría 409
+      // durante 24 h ante un cambio legítimo; una más ancha suprimiría
+      // observaciones que el contador del servidor cuenta.
+      cabeceras["x-idempotency-key"] = claveIdempotencia(spec.idempotencia, body);
+    }
+
+    if (onDebug) onDebug(`celda ${apiUrl} · ${spec.metodo} ${ruta}`);
+    const client = new SequentiaApiClient({ baseUrl: apiUrl, token, onDebug });
+
+    const t0 = performance.now();
+    const { status, data } = await client.request(spec.metodo, ruta, { body, headers: cabeceras });
+    const ms = performance.now() - t0;
+
+    // Llegar acá ya implica 2xx: `request` lanza ante cualquier otra cosa. Es
+    // lo que hace que nunca se recuerde un id venido de un 402, 500 o 502.
+    if (spec.captura === "retrievalId" && data?.retrievalId) {
+      recordarRetrieval({ id: data.retrievalId, kb: String(flags.kb), celda: apiUrl });
+    }
+
+    if (flags.json) {
+      console.log(JSON.stringify(data, null, 2));
+      console.error(`${status} · ${formatMs(ms)}`);
+    } else {
+      printPretty(data);
+      console.log(`\n${status} · ${formatMs(ms)} · ${spec.metodo} ${ruta}`);
+      if (spec.captura === "retrievalId" && data?.retrievalId) {
+        // El comando se arma con el mismo constructor que el resto: la KB entra
+        // citada, así que un slug con espacios o comillas sigue siendo pegable.
+        const califica = buildCommandLine("api feedback", { kb: flags.kb, rating: "helpful" }, { needsYes: true });
+        console.log(`retrievalId recordado por ${RETRIEVAL_TTL_MS / 60000} min. Para calificar:\n  ${califica}`);
+      }
+    }
+    return EXIT_OK;
+  }
+
+  if (sub === "doctor") {
+    const { apiUrl, token } = resolveApiConfig(flags);
+    const client = new SequentiaApiClient({ baseUrl: apiUrl, token, onDebug });
+
+    // Se dice ANTES de sondear, no en el informe: quien lo corre tiene que
+    // saber qué va a tocar mientras lo toca, no después. Un diagnóstico que
+    // factura no es un diagnóstico.
+    console.error("Sondeo solo las peticiones que la colección declara sin escrituras y sin créditos.");
+    console.error("No se toca ninguna que cobre o escriba, así que hay scopes que quedan sin sondear.");
+
+    // La narración va a stderr SIEMPRE, no solo bajo --json: es progreso, y
+    // mezclarla con el informe haría que `api doctor > informe.txt` guardara
+    // los pasos en vez del resultado.
+    const t0 = performance.now();
+    const informe = await diagnosticar(client, {
+      onPaso: (fase, que) => console.error(fase === "celda" ? `· ${que}` : `· sondeando ${que}`),
+    });
+    const ms = performance.now() - t0;
+
+    if (flags.json) {
+      console.log(JSON.stringify(informe, null, 2));
+    } else {
+      console.log(formatearInforme(informe).join("\n"));
+      console.log(`${informe.sondeos.length} sondeos · ${formatMs(ms)}`);
+    }
+    // Una celda que no responde es un fallo de transporte y sale con 3: el
+    // diagnóstico no pudo hacerse. Todo lo demás salió con 0 porque el informe
+    // ES el resultado — una key sin un scope no es un fallo del comando.
+    return informe.celda.alcanzable ? EXIT_OK : EXIT_TRANSPORT;
+  }
+
+  if (sub === "collection") {
+    if (!flags.check && !flags.refresh) {
+      throw new UsageError(
+        `"api collection" necesita --check o --refresh.\n` +
+          `  --check    contrasta la colección empaquetada con la publicada\n` +
+          `  --refresh  además guarda lo traído en ${CACHE_FILE}`,
+      );
+    }
+    const { values: dotenv } = loadDotenv();
+    const url = process.env[COLLECTION_URL_KEY] ?? dotenv[COLLECTION_URL_KEY];
+    if (!url) {
+      throw new UsageError(
+        `Falta ${COLLECTION_URL_KEY}: la URL de lectura de la colección publicada.\n` +
+          "  Es la de la API de Postman con su access key, algo con la forma\n" +
+          "  https://api.postman.com/collections/<uid>?access_key=<key>\n" +
+          "  Mientras la colección no esté publicada, este comando no tiene con qué contrastar.\n" +
+          "  Ver collection/PUBLISHING.md.",
+      );
+    }
+
+    if (onDebug) onDebug(`trayendo ${url.replace(/access_key=[^&]*/, "access_key=…")}`);
+    const publicada = await traerPublicada(url);
+    // `cargarCatalogo` lee de un archivo, así que lo traído se escribe antes de
+    // compararlo. Con --refresh eso queda en la caché del usuario; sin él va a
+    // un temporal, porque `--check` es de solo lectura y no debe dejar rastro.
+    const destino = flags.refresh ? guardarCache(publicada) : join(tmpdir(), `sq-test-coleccion-${process.pid}.json`);
+    const remoto = catalogoDe(publicada, destino);
+    const local = cargarCatalogo();
+    const derivas = comparar(local, remoto);
+
+    if (!flags.refresh) rmSync(destino, { force: true });
+
+    if (flags.json) {
+      console.log(JSON.stringify({ derivas, cache: flags.refresh ? destino : null }, null, 2));
+    } else {
+      console.log(formatearDerivas(derivas).join("\n"));
+      if (flags.refresh) console.log(`\nCaché en ${destino}`);
+    }
+    // Una deriva no es un fallo del comando: es su hallazgo. Pero tiene que
+    // poder romper un CI, así que sale con 1 — el mismo código que usa el CLI
+    // para "la operación se hizo y el resultado es negativo".
+    return derivas.length ? EXIT_TOOL_ERROR : EXIT_OK;
+  }
+
+  if (sub === "loop") {
+    const pregunta = positional[2];
+    if (!String(pregunta).trim()) {
+      throw new UsageError("La pregunta no puede estar en blanco: no hay nada que recuperar.");
+    }
+    const kb = required(flags, "kb", "la knowledge base");
+
+    // El umbral es la ÚNICA cifra de política del bucle. Todo lo demás sale de
+    // lo que contesta el servidor.
+    let umbral = MAX_SEND_RISK;
+    if (flags["max-send-risk"] !== undefined) {
+      const n = Number(flags["max-send-risk"]);
+      if (!Number.isFinite(n) || n < 0 || n > 1) {
+        throw new UsageError(`--max-send-risk es un riesgo, así que va entre 0 y 1 (recibí "${flags["max-send-risk"]}")`);
+      }
+      umbral = n;
+    }
+
+    // Los dos carriles tienen topes distintos: /retrieve topa en 50 y /query en
+    // 20. Con --managed se corren los dos con el MISMO número, así que un valor
+    // que uno acepta y el otro no se RECHAZA en vez de recortarse — recortar en
+    // silencio compararía dos cosas distintas y llamaría a eso un contraste.
+    let maxResults;
+    if (flags["max-results"] !== undefined) {
+      const tope = flags.managed ? MANAGED_MAX_RESULTS : RETRIEVE_MAX_RESULTS;
+      maxResults = intInRange(flags, "max-results", 1, tope);
+      if (flags.managed && maxResults > MANAGED_MAX_RESULTS) {
+        throw new UsageError(`--managed contrasta contra /agent/query, que topa en ${MANAGED_MAX_RESULTS}.`);
+      }
+    }
+
+    // `--no-generate` para tras recuperar, así que ni verifica ni contrasta:
+    // aceptar opciones que gobiernan esos pasos y no usarlas es el fallo
+    // silencioso que este CLI rechaza en todas partes (invariante 3).
+    if (flags["no-generate"]) {
+      for (const opt of ["show-evidence", "managed"]) {
+        if (flags[opt]) {
+          throw new UsageError(
+            `--${opt} no hace nada con --no-generate: el bucle para tras recuperar,\n` +
+              "  así que no hay verificación que mostrar ni carril gestionado que contrastar.",
+          );
+        }
+      }
+    }
+
+    const { apiUrl, token } = resolveApiConfig(flags);
+    // El modelo se resuelve ANTES de la primera llamada. `/agent/retrieve`
+    // gasta créditos, y una corrida que no puede terminar por falta de config
+    // no debería gastarlos primero para después decir que falta una variable.
+    // Es lo que hace que el 2 signifique de verdad "rechazada antes de empezar".
+    const llm = flags["no-generate"] ? null : resolveLlmConfig(flags);
+    const client = new SequentiaApiClient({ baseUrl: apiUrl, token, onDebug });
+
+    // La narración va a stderr siempre: bajo --json el único valor de stdout es
+    // la traza, y sin --json el informe se lee igual con el progreso al lado.
+    const mostrarEvidencia = Boolean(flags["show-evidence"]);
+    if (!mostrarEvidencia && !flags["no-generate"]) {
+      // `/verify` recupera a visibilidad INTERNA sea cual sea el alcance de la
+      // key, así que su evidencia se oculta salvo que la pidan. Solo se avisa
+      // cuando de verdad va a haber una verificación.
+      console.error("(la evidencia de verificación va oculta: /verify recupera a visibilidad interna — --show-evidence para verla)");
+    }
+
+    const traza = await correrBucle({
+      client,
+      pregunta,
+      kb,
+      opciones: {
+        umbral,
+        maxResults,
+        generarRespuesta: !flags["no-generate"],
+        llm,
+        gestionado: Boolean(flags.managed),
+        flags,
+        onDebug,
+      },
+      // Los pasos son PROGRESO y van a stderr. La decisión no: es el
+      // resultado, y con `api loop > decision.txt` tiene que ser lo que queda
+      // en el archivo — narrarla por stderr dejaría el archivo vacío.
+      onPaso: (paso) => {
+        if (paso.paso !== "decidir") console.error(narrar(paso, { mostrarEvidencia }));
+      },
+    });
+
+    // La traza es un ARRAY, y lo es en todos los caminos: quien la parsea no
+    // debería escribir dos formas según el desenlace.
+    if (flags.json) {
+      console.log(JSON.stringify(traza, null, 2));
+    } else {
+      const fin = traza.findLast((p) => p.paso === "decidir");
+      if (fin) console.log(narrar(fin, { mostrarEvidencia }).trimStart());
+    }
+
+    // 0 mandar · 1 escalar. Un `--no-generate` no decide nada, y sale 0 porque
+    // hizo lo que se le pidió: el desenlace está en la traza, no en el código.
+    return decisionDe(traza) === "escalar" ? EXIT_TOOL_ERROR : EXIT_OK;
+  }
+
+  if (sub === "list") {
+    // No necesita credencial ni red: la colección viaja en el paquete. Es el
+    // análogo REST de `tools`, salvo que `tools` pregunta al servidor y esto
+    // lee lo que el cliente trae — la deriva entre ambos la caza S9.
+    const { entradas } = cargarCatalogo();
+    const filas = [...entradas.values()];
+
+    if (flags.json) {
+      console.log(JSON.stringify(filas.map((e) => ({ ...e, variables: [...e.variables] })), null, 2));
+      return EXIT_OK;
+    }
+
+    printTable(filas, [
+      { header: "PETICIÓN", get: (e) => e.nombre },
+      { header: "MÉTODO", get: (e) => e.metodo },
+      { header: "SCOPES", get: (e) => e.scopes.join(" | ") || "—" },
+      { header: "EFECTOS", get: (e) => efectosDe(e) },
+    ]);
+    const escriben = filas.filter((e) => e.persists).length;
+    const gastan = filas.filter((e) => e.spendsCredits).length;
+    console.log(`\n${filas.length} peticiones · ${escriben} escriben · ${gastan} gastan créditos.`);
+    console.log(`Para correr una:  ${cmd} api run '<nombre>'`);
+    return EXIT_OK;
+  }
+
+  if (sub === "run") {
+    const { entradas, coleccion } = cargarCatalogo();
+    const entrada = buscarPeticion(entradas, positional[2]);
+    const vars = parseVars(flags.var);
+
+    // La guarda va ANTES de resolver variables y antes de cualquier red, y sale
+    // de la metadata de la propia petición: una petición nueva que escribe o
+    // cuesta nace protegida, sin que nadie tenga que acordarse de agregarla a
+    // una lista. Es la misma promesa que SIDE_EFFECT_TOOLS da en el carril MCP.
+    if (necesitaConfirmacion(entrada) && !flags.yes) {
+      const que = [entrada.persists && `persiste ${entrada.persists}`, entrada.spendsCredits && "gasta créditos de IA"]
+        .filter(Boolean)
+        .join(" y ");
+      throw new UsageError(
+        `"${entrada.nombre}" ${que}.\n  Volvé a correrlo con --yes si querés hacerlo de verdad.`,
+      );
+    }
+
+    // Resolver antes de pedir la config: una variable faltante es un error de
+    // uso, y tiene que verse aunque todavía no haya celda configurada.
+    const peticion = resolverPeticion(entrada, vars, coleccion);
+
+    const { apiUrl, token } = resolveApiConfig(flags, { requireToken: entrada.auth });
+    if (onDebug) onDebug(`celda ${apiUrl} · ${peticion.metodo} ${peticion.ruta}`);
+    const client = new SequentiaApiClient({ baseUrl: apiUrl, token, onDebug });
+
+    const t0 = performance.now();
+    const { status, data } = await client.request(peticion.metodo, peticion.ruta, {
+      body: peticion.body,
+      auth: peticion.auth,
+      headers: peticion.cabeceras,
+    });
+    const ms = performance.now() - t0;
+
+    if (flags.json) {
+      console.log(JSON.stringify(data, null, 2));
+      console.error(`${status} · ${formatMs(ms)}`);
+    } else {
+      printPretty(data);
+      console.log(`\n${status} · ${formatMs(ms)} · ${peticion.metodo} ${peticion.ruta}`);
     }
     return EXIT_OK;
   }
@@ -463,7 +905,7 @@ let parsedFlags = {};
 try {
   process.exitCode = await main();
 } catch (err) {
-  if (err instanceof UsageError) {
+  if (err instanceof UsageError || err instanceof CatalogError) {
     console.error(`Error: ${err.message}`);
     process.exitCode = EXIT_USAGE;
   } else if (err instanceof McpToolError) {
@@ -472,7 +914,13 @@ try {
     if (parsedFlags.raw && err.envelope) console.log(JSON.stringify(err.envelope, null, 2));
     console.error(`La herramienta ${err.tool} devolvió un error:\n  ${err.message}`);
     process.exitCode = EXIT_TOOL_ERROR;
-  } else if (err instanceof McpTransportError || err instanceof ApiTransportError) {
+  } else if (err instanceof ContractError || err instanceof LlmError) {
+    // Sale con 1, no con 3: la llamada llegó y contestó 2xx — lo que no se
+    // sostuvo fue el cuerpo. No es transporte ni auth, es "la operación se
+    // hizo y el resultado es negativo", que en este CLI es 1.
+    console.error(`Error: ${err.message}`);
+    process.exitCode = EXIT_TOOL_ERROR;
+  } else if (err instanceof McpTransportError || err instanceof ApiTransportError || err instanceof SyncError) {
     console.error(`Error de transporte: ${err.message}`);
     if (err.wwwAuthenticate) console.error(`  WWW-Authenticate: ${err.wwwAuthenticate}`);
     if (err.body) console.error(`  Respuesta: ${String(err.body).slice(0, 500)}`);

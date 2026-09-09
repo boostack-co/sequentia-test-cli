@@ -61,6 +61,18 @@ jobs:
           set -e
           node sq-test.mjs --help > /dev/null
           echo "" | node sq-test.mjs > /dev/null || test $? -eq 2   # sin TTY: ayuda + 2
+          # La deducción de `api doctor` es pura, así que se ejercita sin
+          # credencial y sin red — incluida la rama que la colección de hoy no
+          # alcanza. Un motivo mal asignado no falla, solo miente.
+          node doctor-smoke.mjs
+          # La coleccion es cara al cliente: si una descripcion miente sobre lo
+          # que una peticion escribe o cuesta, el dano es de quien la corre.
+          # Corre sin credenciales y sin red, como el resto del CI.
+          node collection-lint.mjs
+          # La politica y los contratos del bucle son puros: se ejercitan sin
+          # credencial, sin modelo y sin red. Un contrato mal escrito no falla,
+          # deja pasar; una politica mal escrita manda algo que nadie evaluo.
+          node loop-smoke.mjs
 
       - name: Casos que deben fallar (y con qué código)
         shell: bash
@@ -99,6 +111,85 @@ jobs:
           esperar 2 node sq-test.mjs api health --json=quizas             # booleano con valor inválido
           esperar 2 node sq-test.mjs api health --api-url no-es-una-url   # URL ilegible = config, no transporte
           esperar 2 node sq-test.mjs api health                           # falta SQ_TEST_API_URL
+
+          # Ejecutor genérico. `api list` lee la colección empaquetada, así que
+          # corre sin credencial y sin red: es un caso POSITIVO en esta matriz.
+          node sq-test.mjs api list > /dev/null || { echo "::error::api list falló"; exit 1; }
+          echo "ok  0  node sq-test.mjs api list"
+          esperar 2 node sq-test.mjs api run                                   # falta el nombre
+          esperar 2 node sq-test.mjs api run 'no existe'                       # no está en la colección
+          esperar 2 node sq-test.mjs api run 'Analytics'                       # ambiguo: no elige por vos
+          esperar 2 node sq-test.mjs api run '1. Retrieve' --var kbId=x        # gasta creditos, falta --yes
+          esperar 2 node sq-test.mjs api run 'Get knowledge base'              # falta --var kbId
+          esperar 2 node sq-test.mjs api run 'Health' --var suelto             # --var mal formado
+          esperar 2 node sq-test.mjs api run 'Health' --var baseUrl=http://x   # variable reservada
+          esperar 2 node sq-test.mjs api list --raw                            # --raw no existe en REST
+          esperar 2 node sq-test.mjs api list sobra                            # posicional de mas
+
+          # Atajos del carril agéntico. La guarda de --yes corre ANTES de
+          # resolver la config, así que estos fallan por la guarda y no por
+          # "falta SQ_TEST_API_URL" — que es justamente lo que tienen que decir.
+          esperar 2 node sq-test.mjs api retrieve --kb X --q Y                  # gasta creditos, falta --yes
+          esperar 2 node sq-test.mjs api verify --kb X --claim Y                # idem
+          esperar 2 node sq-test.mjs api gap-report --kb X --q Y --yes=false    # el booleano explicito no bypassea
+          esperar 2 node sq-test.mjs api feedback --kb X --rating helpful       # persiste, falta --yes
+          esperar 2 node sq-test.mjs api query --kb X --q Y --yes               # /query toma un array: es --kbs
+          esperar 2 node sq-test.mjs api retrieve --kb X --q Y --mximo 3 --yes  # flag desconocido, no se ignora
+          esperar 2 node sq-test.mjs api retrieve --kb X --q Y sobra --yes      # posicional de mas
+          # `index-status` no gasta ni escribe, asi que no acepta --yes: una
+          # opcion aceptada es una opcion usada.
+          esperar 2 node sq-test.mjs api index-status --kb X --yes
+
+          # Los topes. Estos SI necesitan una celda configurada, porque la
+          # validacion del cuerpo corre despues de resolver la config; sin
+          # --api-url pasarian por "falta SQ_TEST_API_URL" y no probarian el
+          # tope. La URL es .invalid y nada sale a la red: el cuerpo se arma
+          # antes de construir el cliente.
+          celda=(--api-url https://celda.invalid)
+          esperar 2 node sq-test.mjs api retrieve --kb X --q Y --max-results 60 --yes "${celda[@]}"   # /retrieve topa en 50
+          esperar 2 node sq-test.mjs api query --kbs X --q Y --max-results 30 --yes "${celda[@]}"     # /query topa en 20
+          esperar 2 node sq-test.mjs api query --kbs A,A --q Y --yes "${celda[@]}"                    # KBs repetidas
+          esperar 2 node sq-test.mjs api query --kbs '' --q Y --yes "${celda[@]}"                     # lista vacia
+          esperar 2 node sq-test.mjs api index-status "${celda[@]}"                                   # falta --kb
+          esperar 2 node sq-test.mjs api gap-report --kb X --q Y --priority urgente --yes "${celda[@]}"
+          esperar 2 node sq-test.mjs api feedback --kb X --rating quizas --yes "${celda[@]}"
+          # Sin id recordado, `feedback` se niega: el campo es opcional en el
+          # esquema, asi que un vacio escribiria una fila ligada a nada.
+          esperar 2 node sq-test.mjs api feedback --kb X --rating helpful --yes "${celda[@]}"
+          # `api doctor` no toma opciones: lo que necesita sale de la config.
+          # Un flag aceptado y no usado es el fallo silencioso que este CLI
+          # rechaza en todas partes.
+          esperar 2 node sq-test.mjs api doctor --kb X            # no existe esa opcion
+          esperar 2 node sq-test.mjs api doctor --yes             # no escribe: nada que confirmar
+          esperar 2 node sq-test.mjs api doctor sobra             # posicional de mas
+          esperar 2 node sq-test.mjs api doctor                   # falta SQ_TEST_API_URL
+          # `api collection` contrasta con lo publicado. Sin red no se puede
+          # contrastar, asi que lo que se ejercita aca es el parseo y la config.
+          esperar 2 node sq-test.mjs api collection                            # falta --check o --refresh
+          esperar 2 node sq-test.mjs api collection --checkk                   # flag mal escrito
+          esperar 2 node sq-test.mjs api collection --check sobra              # posicional de mas
+          esperar 2 node sq-test.mjs api collection --check                    # falta SQ_TEST_COLLECTION_URL
+
+          # El bucle. Todos fallan en el parseo o en la config: ninguno sale a
+          # la red, y el que necesita celda la recibe inalcanzable.
+          esperar 2 node sq-test.mjs api loop --kb X                            # falta la pregunta
+          esperar 2 node sq-test.mjs api loop ''                                # pregunta en blanco
+          esperar 2 node sq-test.mjs api loop pregunta                          # falta --kb
+          esperar 2 node sq-test.mjs api loop --kb X pregunta sobra             # posicional de mas
+          esperar 2 node sq-test.mjs api loop --kb X --modo raro pregunta       # flag desconocido
+          esperar 2 node sq-test.mjs api loop --kb X --max-send-risk 5 pregunta "${celda[@]}"      # fuera de 0-1
+          esperar 2 node sq-test.mjs api loop --kb X --max-send-risk -1 pregunta "${celda[@]}"     # idem
+          esperar 2 node sq-test.mjs api loop --kb X --max-send-risk abc pregunta "${celda[@]}"    # no es numero
+          # /query topa en 20 y /retrieve en 50: con --managed se corren los dos
+          # con el MISMO numero, asi que se NIEGA en vez de recortar en silencio.
+          esperar 2 node sq-test.mjs api loop --kb X --managed --max-results 30 pregunta "${celda[@]}"
+          # Y las opciones que no harian nada con --no-generate se rechazan.
+          esperar 2 node sq-test.mjs api loop --kb X --no-generate --show-evidence pregunta "${celda[@]}"
+          esperar 2 node sq-test.mjs api loop --kb X --no-generate --managed pregunta "${celda[@]}"
+          # Sin SQ_TEST_LLM_URL se rechaza ANTES de la primera llamada:
+          # /agent/retrieve gasta creditos, y una corrida que no puede terminar
+          # no deberia gastarlos primero.
+          esperar 2 node sq-test.mjs api loop --kb X pregunta "${celda[@]}"
 
       - name: init crea la config del usuario
         shell: bash

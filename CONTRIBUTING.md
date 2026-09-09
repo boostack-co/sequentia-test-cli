@@ -21,9 +21,13 @@ sq-test init          # crea ~/.config/sq-test/.env
 
 ## Cómo verificar un cambio
 
-No hay CI: la verificación es correr el código contra un servidor real. Como mínimo, antes de abrir el PR:
+**Sí hay CI**, y corre sin credenciales: valida sintaxis, que la colección empaquetada no mienta, y que cada caso negativo devuelva el exit code que le toca. Eso significa que un PR desde un fork tiene CI de verdad — pero también que el CI **no prueba contra un servidor**. Esa parte sigue siendo tuya. Como mínimo, antes de abrir el PR:
 
 ```bash
+# lo que el CI corre, y no necesita ni credencial ni red
+node collection-lint.mjs
+node sq-test.mjs api list
+
 # el menú, guionado (cada argumento es una respuesta)
 node menu-smoke.mjs 1 1 "" b q
 node menu-smoke.mjs 1 2 1 "una pregunta" fast 2 "" b q
@@ -50,6 +54,9 @@ Estas son las promesas del proyecto. Si un cambio las toca, tiene que decirlo ex
 4. **El wall-clock y la latencia del servidor son números distintos.** Se muestran separados porque la diferencia entre ambos es el costo de red y handshake. No los mezcles en uno solo.
 5. **El token nunca sale por pantalla.** Ni en los comandos impresos, ni en los mensajes de error, ni en la traza de `--verbose`.
 6. **`--json` emite JSON válido siempre**, también cuando el payload es texto plano. Cualquier cosa que se imprima *además* del payload (tiempos, trazas) va por `stderr`.
+7. **El host nunca sale de la colección.** De la colección salen método, ruta y forma del cuerpo; `baseUrl` y el token salen **siempre** de la config del usuario, y no se pueden pasar con `--var`. Si el host viniera del documento, una colección rotada o suplantada redirigiría un `sk_live_…` a donde quisiera. `catalog.mjs` lo descarta al cargar, así que una petición que nombre su propio host **no carga**.
+8. **Toda petición que escribe lo declara.** Un no-GET sin `persists` en su bloque `sq-test` —aunque sea `null`— no carga. Sin eso, «no escribe» sería indistinguible de «nadie lo pensó», y una petición nueva se publicaría sin la guarda de `--yes` que le corresponde.
+9. **Los números del menú son contrato público.** Están en el README y en los guiones de `menu-smoke.mjs`, y hay gente scripteando contra ellos. Se **agregan** al final; no se renumeran ni se reordenan. Un cambio incompatible es un `feat!` y se dice en el PR.
 
 ## Pull requests
 
@@ -63,7 +70,7 @@ Estas son las promesas del proyecto. Si un cambio las toca, tiene que decirlo ex
 Sobre el PR en sí:
 
 - Un PR = una intención. Decí **qué cambia, por qué, y qué verificar**.
-- Incluí la **salida real** de tu verificación, no la que esperabas. No hay CI que pruebe contra un servidor real: tu verificación es la prueba.
+- Incluí la **salida real** de tu verificación, no la que esperabas. El CI no toca ningún servidor: para todo lo que dependa de uno, tu verificación es la única prueba.
 - Si encontraste el bug usando la herramienta, pegá el comando que imprimió: es exactamente la información que hace falta para reproducirlo.
 
 ## Licencia

@@ -4,7 +4,7 @@
 [![npm](https://img.shields.io/npm/v/sequentia-test-cli)](https://www.npmjs.com/package/sequentia-test-cli)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-Probá las capacidades de integración de [Sequentia](https://sequentia.co) desde la terminal, en minutos. Cubre **MCP** completo, y el **carril API** (`/api/v1`) está en construcción: hoy llega hasta `api health`.
+Probá las capacidades de integración de [Sequentia](https://sequentia.co) desde la terminal, en minutos. Cubre **MCP** completo, y el **carril API** (`/api/v1`) ya corre cualquier petición de su colección.
 
 ```bash
 npm install -g sequentia-test-cli
@@ -143,26 +143,187 @@ La guarda va por **nombre de herramienta**, no por subcomando: `call verify_clai
 
 ## El carril API (`/api/v1`)
 
-El otro frente de integración de Sequentia: la REST que acepta API key. Entra por sesiones; hoy está el cliente y la primera petición.
+El otro frente de integración de Sequentia: la REST que acepta API key. Entra por sesiones; hoy están el cliente, el ejecutor genérico y los atajos del carril agéntico.
 
 | Comando | Qué hace |
 | :--- | :--- |
 | `api health` | Comprueba que la celda responde. **No usa credencial.** |
+| `api list` | Lista lo que declara la colección: scopes, qué escribe y qué cuesta. Tampoco usa credencial ni red. |
+| `api run '<nombre>'` | Corre cualquier petición de la colección. `[--var clave=valor] [--yes]` |
+| `api retrieve` | Recupera fragmentos con procedencia, sin generar nada. `--kb --q [--max-results 1-50] --yes` |
+| `api query` | El carril gestionado: Sequentia sintetiza. `--kbs a,b --q [--max-results 1-20] --yes` |
+| `api verify` | Juzga si una afirmación está fundamentada. `--kb --claim --yes` |
+| `api index-status` | Cuánto de la KB está indexado. `--kb` |
+| `api gap-report` | Reporta que la KB no cubre algo. `--kb --q [--priority] --yes` |
+| `api feedback` | Califica una recuperación que un humano ya leyó. `--kb --rating --yes` |
+| `api doctor` | Perfila la credencial: qué scopes tiene, cuáles no, y dónde se consigue lo que falta. |
+| `api collection --check` | Contrasta la colección empaquetada con la publicada en Postman. `[--refresh]` |
+| `api loop` | El bucle: recuperar → generar con **tu** modelo → verificar → decidir. `--kb '<pregunta>'` |
 
 ```bash
 node sq-test.mjs api health
-node sq-test.mjs api health --json | jq
+node sq-test.mjs api list
+node sq-test.mjs api run 'List knowledge bases' --json | jq
+node sq-test.mjs api run 'Get knowledge base' --var kbId=<uuid>
 ```
+
+### El ejecutor genérico
+
+`api run` es al carril REST lo que `call <tool>` es al MCP: **la colección son datos**, así que agregar un endpoint no requiere tocar el CLI. El nombre se puede dar completo (`Agent API / 1. Retrieve`), solo el de la petición (`1. Retrieve`) o como fragmento; si coincide con varias, **no elige por vos** — las enumera. En un banco de pruebas correr otra cosa de la que se pidió invalida el experimento, y acá hay peticiones que escriben.
+
+Tres guardas corren **antes de cualquier red**:
+
+- **`--yes` sale de la metadata de la petición**, no de una lista mantenida a mano. Una petición nueva que persiste o gasta créditos **nace protegida**.
+- **Una variable sin resolver es un error de uso.** Sin eso, un `{{kbId}}` viaja como texto literal dentro de la ruta y lo que devuelve el servidor se lee como un fallo suyo.
+- **`baseUrl` y `apiKey` no se pueden pasar con `--var`.** El host sale de `SQ_TEST_API_URL` y el token de `SQ_TEST_TOKEN`; que no puedan venir de otro lado es lo que impide que una colección —o un comando pegado— mande tu API key a un servidor ajeno.
 
 **Son dos endpoints distintos, y ahí empiezan casi todos los problemas.** El de MCP (`SQ_TEST_URL`) suele ser el gateway universal, el mismo para todos. La API REST la sirve **tu celda**, así que `SQ_TEST_API_URL` es un host propio y no tiene default: un valor por defecto acá sería un host ajeno recibiendo tu API key como bearer token en cada petición.
 
 Se acepta **con y sin `/api/v1`**. No es una comodidad: cada ruta ya empieza con ese prefijo, así que pegar el base URL en la forma en que suele aparecer documentado daba `/api/v1/api/v1/…`, un 404 que se lee como un problema del despliegue y es de configuración.
 
+### Los atajos del carril agéntico
+
+`api run` ya puede correr estos seis endpoints. Los atajos existen por lo que el ejecutor genérico no puede dar: **convertir un 400 del servidor en un mensaje entendible sin salir a la red**, y encadenar `retrieve → feedback`.
+
+```bash
+node sq-test.mjs api retrieve --kb <slug> --q "¿cómo restablezco la contraseña?" --yes
+node sq-test.mjs api feedback --kb <slug> --rating helpful --yes   # usa el id recordado
+node sq-test.mjs api index-status --kb <slug>                      # ni escribe ni cuesta: no pide --yes
+```
+
+**Los contratos se parecen y no son iguales**, y equivocarse es un 400:
+
+| | knowledge bases | tope |
+| :--- | :--- | :--- |
+| `api query` | `--kbs a,b` — **array** de 1 a 10, sin repetidos | `--max-results` 1–**20** |
+| `api retrieve` | `--kb` — una sola | `--max-results` 1–**50** |
+| `api verify` | `--kb` — una sola | `--claim` ≤ 4000 caracteres |
+
+Por eso son dos flags distintos: pasarle `--kb` a `api query` no se corrige en silencio, se rechaza explicando que ese endpoint toma un array. Que la asimetría se vea en el comando es más barato que descubrirla en un 400.
+
+**El `retrievalId` se recuerda, y con fecha de vencimiento.** `api retrieve` lo guarda en `~/.config/sq-test/estado.json` (nunca el token) junto con **contra qué KB y contra qué celda** se capturó, para que `api feedback` no tenga que repetirlo. Se guarda **solo con una respuesta exitosa**: este carril también devuelve un `retrievalId` en los cuerpos de 402, 500 y 502, y atarle un feedback lo ligaría a una consulta que nunca produjo respuesta.
+
+`api feedback` se niega en cuatro casos, y los cuatro terminan en una fila escrita que nadie podría interpretar después:
+
+- **no hay ningún id recordado** — el campo es opcional en el esquema del servidor, así que un vacío se aceptaría y escribiría una fila ligada a nada, sesgando en silencio la analítica de utilidad;
+- **el id tiene más de diez minutos** — política de este CLI, no del servidor;
+- **se capturó contra otra KB** — el servidor escribiría la fila igual, y la calificación aterrizaría en un panel que esa recuperación nunca tocó;
+- **se capturó contra otra celda** — un id de otra celda no identifica nada acá.
+
+Las cuatro se saltan pasando `--retrieval-id <id>` explícito: ahí quien lo escribe se hace cargo.
+
+**La clave de idempotencia se deriva del cuerpo entero** (`x-idempotency-key`, en `gap-report` y `feedback`). El requisito es que cubra exactamente lo mismo que el cuerpo, y derivarla de él lo cumple por construcción: reintentar lo mismo deduplica, y mandar algo distinto es otra observación. Una clave más estrecha devolvería 409 durante 24 h ante un cambio legítimo; una más ancha suprimiría observaciones que el contador del servidor cuenta.
+### `api doctor` — perfilar la credencial antes del 403
+
+Es lo que ni la colección ni un ejemplo dan por su cuenta: los dos te dejan ver que algo falla; ninguno dice **por qué**, y las causas que comparten status mandan a rotar keys que estaban bien.
+
+```bash
+node sq-test.mjs api doctor
+node sq-test.mjs api doctor --json | jq '.scopes'
+```
+
+Reporta el estado de cada scope en **tres** valores, y el tercero no es relleno:
+
+| | qué significa |
+| :--- | :--- |
+| `✔ confirmado` | una petición gratuita respondió 2xx |
+| `✘ ausente` | una petición gratuita respondió 403, y la deducción pudo nombrar cuál faltaba |
+| `· sin sondear` | **no se probó**, y el informe dice por qué |
+
+**Solo sondea lo que la colección declara sin escrituras y sin créditos**, y lo dice antes de empezar. Un diagnóstico que factura no es un diagnóstico. El conjunto sale de la metadata, no de una lista: un endpoint gratuito nuevo entra solo, y uno que cobra no se sondea nunca por descuido. El precio es que cinco de los `agent.*` quedan sin sondear, y el informe lo declara en vez de darlos por ausentes — decir que falta un permiso que quizá ya está manda a pedirlo de nuevo.
+
+**El `kbId` sale de la lista que la propia key devuelve.** Eso quita del medio la ambigüedad más cara del 403: contra una KB que la key acaba de enumerar, un 403 ya no puede ser «esa KB no está en tu lista blanca».
+
+**Deduce por resta cuando una petición pide dos scopes.** `GET /agent/index-status/:kbId` necesita `agent.index_status` **y** `kb.read`; si el segundo ya se confirmó por su cuenta, el informe nombra el primero en vez de acusar a los dos. Si no puede decidir, dice que hay dos candidatos — no elige.
+
+**Distingue las tres cosas que se confunden**, y que tienen remedios distintos:
+
+| | qué está pasando |
+| :--- | :--- |
+| `403` | falta un scope — la key y el plan están bien |
+| `402 MODULE_NOT_ENTITLED` | el plan no incluye el módulo agéntico: **pedir más scopes no lo arregla** |
+| `402` sin créditos | la key y los permisos están bien; lo que falta es saldo |
+| `402` workspace | suspendido o forzando SSO: la key es válida y lo cerrado es el workspace |
+| `401` | la key no fue aceptada, y entonces **no se puede afirmar nada de sus scopes** |
+
+Y dice **dónde se consigue lo que falta**: los tres formularios de creación de keys de Admin Studio **no son superconjunto entre sí**, así que ninguna key creada desde uno solo los abre todos. `gaps.read` y `kb.read_internal` no figuran en ninguno.
+
+> **Sobre `kb.read_internal`**, el informe avisa en vez de reforzar el error habitual: gobierna un puñado de peticiones y **no es una frontera de confidencialidad general**. Lo que acota lo que una key alcanza es su lista blanca de KBs más un filtro de audiencia que falla cerrado. Provisionar una key creyendo que negar ese scope oculta el contenido interno es el error que este comando existe para no cometer.
+
+Sale con `0` aunque falten scopes — **el informe es el resultado**, y una key incompleta no es un fallo del comando. Solo sale con `3` si la celda no responde, porque ahí no hubo diagnóstico.
+
+### `api loop` — el bucle gobernado
+
+**Recuperar → generar con tu modelo → verificar → decidir.** No es un tutorial del flujo, que es obvio: es el flujo con las decisiones difíciles tomadas, y lo que enseña es **dónde está la frontera de responsabilidad**. Sequentia recupera y verifica; el modelo y la decisión son tuyos.
+
+```bash
+export SQ_TEST_LLM_URL=http://localhost:11434/v1/chat/completions
+export SQ_TEST_LLM_MODEL=llama3.1
+
+node sq-test.mjs api loop --kb <slug> "¿cómo restablezco la contraseña?"
+node sq-test.mjs api loop --kb <slug> --no-generate "…"     # sin modelo, sin escribir
+node sq-test.mjs api loop --kb <slug> --json "…" | jq       # un solo valor JSON
+```
+
+El modelo es **tuyo**: este CLI no trae ninguno. El shape es el `/chat/completions` de OpenAI, que cubre vLLM, Ollama, LM Studio, OpenRouter y OpenAI directo tal cual. **Azure queda afuera a propósito** — necesita `endpoint`, `apiVersion` y `deployment`, y fingir que anda sería peor que decir que no está.
+
+**Sin framework de agentes**, y no por ascetismo: un framework resuelve selección no determinista de herramientas, y este bucle es lineal y fijo, así que no habría nada que orquestar. Lo caro de acá —los contratos, la política, la traza— ningún framework lo trae, y un framework lo esconde.
+
+#### Una sola cifra de política
+
+`--max-send-risk`, 0.5 por defecto. **Todo lo demás se deriva de la respuesta del servidor**: `supported` con riesgo bajo manda, `unsupported` escala, y `contradicted` escala **siempre** sin mirar el riesgo — que la KB contradiga lo que el modelo escribió no es incertidumbre, es un desacuerdo.
+
+Si la verificación no trae ni `riskScore` ni `confidence`, **escala y lo dice**. Asumir riesgo cero mandaría una respuesta que nadie evaluó.
+
+#### Un tipo no basta cuando de un número sale una decisión
+
+```
+riskScore: false  ->  Number(false) === 0  ->  riesgo mínimo  ->  MANDAR
+riskScore: -5     ->  -5 <= 0.5            ->                     MANDAR
+```
+
+Las dos pasan cualquier comprobación laxa y las dos mandan. Se cierra con un **predicado** —número real, finito, dentro del rango que el servidor promete— y no con un `typeof`.
+
+#### Contratos de respuesta: `requires` contra `accepts`
+
+La distinción **es** el diseño:
+
+- **`requires`** — el campo cuya **ausencia hace que el default del llamante engañe**. Sin `chunks`, la recuperación se lee como vacía, o sea la rama de sin-evidencia — y esa rama archiva un hueco durable culpando a un curador por una pregunta que la KB quizá cubre. **La ausencia es el defecto.**
+- **`accepts`** — el campo cuyo default es inocuo pero cuyo **tipo equivocado revienta**, y revienta *después* de haber anotado el paso como exitoso. **Solo el tipo es el defecto.**
+
+Se declaran en el sitio de la llamada, no en un registro central: solo quien llama sabe qué campos lee, y nombrarlos ahí es lo que hace visible en un review qué necesita un endpoint nuevo.
+
+#### Modos y salida
+
+| | |
+| :--- | :--- |
+| `--no-generate` | para tras recuperar: mirar scopes y procedencia sin modelo y **sin escribir nada** |
+| `--managed` | contrasta con `/agent/query`. **Se niega** por encima de 20 en vez de recortar: los dos carriles tienen topes distintos y recortar en silencio compararía dos cosas diferentes |
+| `--show-evidence` | muestra la evidencia de verificación, **oculta por defecto** porque `/verify` recupera a visibilidad interna sea cual sea el alcance de la key |
+| `--json` | la traza, que es un **array** en todos los caminos — quien la parsea no debería escribir dos formas según el desenlace |
+
+El progreso va a stderr y la decisión a stdout, así que `api loop … > decision.txt` guarda la decisión y no los pasos.
+
+**Exit codes:** `0` mandar · `1` escalar, o una llamada que no se sostuvo · `2` rechazada antes de empezar. Ese `2` es literal: la config del modelo se comprueba **antes** de la primera llamada, porque `/agent/retrieve` gasta créditos y una corrida que no puede terminar no debería gastarlos primero.
+
 ### La colección Postman
 
-En [`collection/`](collection/) vive la colección pública de la API, con su entorno. Es el mismo artefacto que un cliente importa para tocar la API en cinco minutos sin escribir código, y el que el CLI va a usar como **catálogo ejecutable**: un ejecutor genérico correrá cualquier petición que la colección declare.
+En [`collection/`](collection/) vive la colección pública de la API, con su entorno. Es el mismo artefacto que un cliente importa para tocar la API en cinco minutos sin escribir código, y el que el CLI usa como **catálogo ejecutable**: `api run` corre cualquier petición que la colección declare.
 
 Cada petición lleva en su descripción un bloque `sq-test` legible por máquina con sus scopes, qué persiste y si gasta créditos — que es lo que después alimenta la guarda de `--yes`. Ver [`collection/README.md`](collection/README.md) para usarla y [`collection/PUBLISHING.md`](collection/PUBLISHING.md) para mantenerla.
+
+**El original vive acá y lo de Postman es una copia.** `api collection --check` es lo que hace cumplir esa regla: trae la publicada y reporta la deriva **en los dos sentidos** — lo que está acá y no allá (falta republicar) y lo que está allá y no acá (alguien editó en la interfaz de Postman). Sale con `1` si hay deriva, así que puede romper un pipeline.
+
+```bash
+node sq-test.mjs api collection --check      # necesita SQ_TEST_COLLECTION_URL
+node sq-test.mjs api collection --refresh    # además guarda lo traído en ~/.config/sq-test/
+```
+
+Compara el **catálogo**, no el JSON crudo: Postman le agrega ids y marcas de tiempo a lo que publica, y un diff textual estaría siempre en rojo — que es la forma más común de que un control deje de controlar. Se comparan método, ruta, cuerpo, la metadata que gobierna `--yes`, la descripción y las variables de colección.
+
+Si la access key se rota o se revoca, **lo único que se rompe es este comando**: el CLI sigue andando con la colección empaquetada. Es a propósito, y es la razón de que el original viva en el repo.
+
+`collection-lint.mjs` corre en el CI, sin credenciales ni red, y rechaza una colección que emita una variable que nadie define, que declare una que nadie usa, que traiga un default de URL **alcanzable**, que lleve un valor en `apiKey`, o cuyo `collection/README.md` contradiga la metadata — esa última guarda existe porque la contradicción ya pasó.
 
 **`api health` va sin autenticar a propósito**, y por eso es el primer comando a correr: si falla, el problema es la URL y no la credencial. Cualquier otro orden hace que un token malo y un host mal copiado se vean igual.
 
@@ -200,7 +361,9 @@ Los booleanos (`--json`, `--raw`, `--verbose`, `--yes`) no toman valor: se usan 
 
 ### Exit codes
 
-`0` ok · `1` la herramienta devolvió `isError` · `2` uso o configuración · `3` transporte, auth o rate limit.
+`0` ok · `1` la herramienta devolvió `isError`, o `api collection --check` encontró deriva · `2` uso o configuración · `3` transporte, auth o rate limit.
+
+El `1` es siempre lo mismo: **la operación se hizo y el resultado es negativo**. No lo usa `api doctor`, que sale con `0` aunque falten scopes — ahí el informe *es* el resultado, y una key incompleta no es un fallo del comando.
 
 Pensado para scriptear: `node.exe sq-test.mjs search --kb X --q Y --json | jq -r '.[].slug'`.
 
@@ -255,6 +418,14 @@ La referencia pública de las herramientas muestra ejemplos de `tools/call` suel
 | :--- | :--- |
 | `mcp-client.mjs` | `SequentiaMcpClient` — transporte reusable (handshake, SSE, sesión, reintentos, errores). Importable desde otros scripts. |
 | `api-client.mjs` | `SequentiaApiClient` — el transporte REST: sin sesión, con la taxonomía de errores del carril API. También importable. |
+| `catalog.mjs` | Lee la colección y la convierte en el catálogo que el CLI ejecuta. Es donde se descarta el host y donde se lee qué escribe cada petición. |
+| `agent.mjs` | Los seis endpoints del carril agéntico por nombre: sus topes, la memoria del `retrievalId` y la clave de idempotencia. |
+| `doctor.mjs` | El diagnóstico de credencial: qué sondear, cómo clasificar cada fallo y la deducción de qué scope falta. |
+| `doctor-smoke.mjs` | Ejercita esa deducción con sondeos fabricados, sin red ni credencial. Corre en el CI. |
+| `collection-sync.mjs` | Trae la colección publicada y la contrasta con la empaquetada. |
+| `collection-lint.mjs` | Las guardas sobre la colección: variables, defaults inalcanzables, y que la prosa no contradiga la metadata. |
+| `loop.mjs` | El bucle: los contratos de respuesta, la política de riesgo y la traza. |
+| `loop-smoke.mjs` | Ejercita esa política y esos contratos con respuestas fabricadas, sin red ni modelo. Corre en el CI. |
 | `collection/` | La colección Postman pública y su entorno, más cómo se usa y cómo se mantiene. |
 | `sq-test.mjs` | El CLI: flags, subcomandos, formato, exit codes. |
 | `.env.example` | Plantilla de configuración. |
