@@ -35,7 +35,9 @@
     "api-client.mjs",
     "catalog.mjs",
     "agent.mjs",
+    "doctor.mjs",
     "collection/",
+    "doctor-smoke.mjs",
     "menu-smoke.mjs",
     "README.md"
   ],
@@ -43,6 +45,7 @@
     "start": "node sq-test.mjs",
     "tools": "node sq-test.mjs tools",
     "kbs": "node sq-test.mjs list-kbs",
-    "smoke": "node menu-smoke.mjs 1 1 \"\" b q"
+    "smoke": "node menu-smoke.mjs 1 1 \"\" b q",
+    "doctor": "node sq-test.mjs api doctor"
   }
 }

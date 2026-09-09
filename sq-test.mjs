@@ -16,6 +16,7 @@
 import { stdin, stdout } from "node:process";
 import { SequentiaMcpClient, McpToolError, McpTransportError } from "./mcp-client.mjs";
 import { SequentiaApiClient, ApiTransportError } from "./api-client.mjs";
+import { diagnosticar, formatearInforme } from "./doctor.mjs";
 import {
   AGENT_COMMANDS,
   RETRIEVAL_TTL_MS,
@@ -116,6 +117,11 @@ const API_SUBCOMMANDS = {
   },
   list: {
     help: "Lista lo que declara la colección: scopes, qué escribe y qué cuesta.",
+    opts: [],
+    posicionales: 2,
+  },
+  doctor: {
+    help: "Perfila la credencial: qué scopes tiene y dónde se consigue lo que falta.",
     opts: [],
     posicionales: 2,
   },
@@ -451,6 +457,37 @@ async function comandoApi(flags, positional) {
       }
     }
     return EXIT_OK;
+  }
+
+  if (sub === "doctor") {
+    const { apiUrl, token } = resolveApiConfig(flags);
+    const client = new SequentiaApiClient({ baseUrl: apiUrl, token, onDebug });
+
+    // Se dice ANTES de sondear, no en el informe: quien lo corre tiene que
+    // saber qué va a tocar mientras lo toca, no después. Un diagnóstico que
+    // factura no es un diagnóstico.
+    console.error("Sondeo solo las peticiones que la colección declara sin escrituras y sin créditos.");
+    console.error("No se toca ninguna que cobre o escriba, así que hay scopes que quedan sin sondear.");
+
+    // La narración va a stderr SIEMPRE, no solo bajo --json: es progreso, y
+    // mezclarla con el informe haría que `api doctor > informe.txt` guardara
+    // los pasos en vez del resultado.
+    const t0 = performance.now();
+    const informe = await diagnosticar(client, {
+      onPaso: (fase, que) => console.error(fase === "celda" ? `· ${que}` : `· sondeando ${que}`),
+    });
+    const ms = performance.now() - t0;
+
+    if (flags.json) {
+      console.log(JSON.stringify(informe, null, 2));
+    } else {
+      console.log(formatearInforme(informe).join("\n"));
+      console.log(`${informe.sondeos.length} sondeos · ${formatMs(ms)}`);
+    }
+    // Una celda que no responde es un fallo de transporte y sale con 3: el
+    // diagnóstico no pudo hacerse. Todo lo demás salió con 0 porque el informe
+    // ES el resultado — una key sin un scope no es un fallo del comando.
+    return informe.celda.alcanzable ? EXIT_OK : EXIT_TRANSPORT;
   }
 
   if (sub === "list") {
