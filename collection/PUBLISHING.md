@@ -35,7 +35,7 @@ Necesita una cuenta con permiso de escritura sobre el workspace público. Se hac
 | :--- | :--- |
 | El id de la colección publicada | **Sí** — abajo |
 | El workspace público donde vive | **Sí** — abajo |
-| La URL de lectura con su *access key* | **Sí**. Es de solo lectura y de una sola colección, así que es publicable, y el CLI la usa como default de `SQ_TEST_COLLECTION_URL` |
+| La URL de lectura con su *access key* | **Sí**. Es de solo lectura y de una sola colección, así que es publicable. Hoy `SQ_TEST_COLLECTION_URL` **no tiene default**, porque no hay nada publicado todavía; el día de la primera publicación, ponerla como default en `commands.mjs` es parte de ese PR |
 | **La API key de Postman de quien publica** | **No, nunca.** El job `secretos` del CI la rechazaría, y con razón |
 
 <!-- Se completan al publicar por primera vez. -->

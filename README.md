@@ -157,6 +157,7 @@ El otro frente de integración de Sequentia: la REST que acepta API key. Entra p
 | `api gap-report` | Reporta que la KB no cubre algo. `--kb --q [--priority] --yes` |
 | `api feedback` | Califica una recuperación que un humano ya leyó. `--kb --rating --yes` |
 | `api doctor` | Perfila la credencial: qué scopes tiene, cuáles no, y dónde se consigue lo que falta. |
+| `api collection --check` | Contrasta la colección empaquetada con la publicada en Postman. `[--refresh]` |
 
 ```bash
 node sq-test.mjs api health
@@ -256,6 +257,19 @@ En [`collection/`](collection/) vive la colección pública de la API, con su en
 
 Cada petición lleva en su descripción un bloque `sq-test` legible por máquina con sus scopes, qué persiste y si gasta créditos — que es lo que después alimenta la guarda de `--yes`. Ver [`collection/README.md`](collection/README.md) para usarla y [`collection/PUBLISHING.md`](collection/PUBLISHING.md) para mantenerla.
 
+**El original vive acá y lo de Postman es una copia.** `api collection --check` es lo que hace cumplir esa regla: trae la publicada y reporta la deriva **en los dos sentidos** — lo que está acá y no allá (falta republicar) y lo que está allá y no acá (alguien editó en la interfaz de Postman). Sale con `1` si hay deriva, así que puede romper un pipeline.
+
+```bash
+node sq-test.mjs api collection --check      # necesita SQ_TEST_COLLECTION_URL
+node sq-test.mjs api collection --refresh    # además guarda lo traído en ~/.config/sq-test/
+```
+
+Compara el **catálogo**, no el JSON crudo: Postman le agrega ids y marcas de tiempo a lo que publica, y un diff textual estaría siempre en rojo — que es la forma más común de que un control deje de controlar. Se comparan método, ruta, cuerpo, la metadata que gobierna `--yes`, la descripción y las variables de colección.
+
+Si la access key se rota o se revoca, **lo único que se rompe es este comando**: el CLI sigue andando con la colección empaquetada. Es a propósito, y es la razón de que el original viva en el repo.
+
+`collection-lint.mjs` corre en el CI, sin credenciales ni red, y rechaza una colección que emita una variable que nadie define, que declare una que nadie usa, que traiga un default de URL **alcanzable**, que lleve un valor en `apiKey`, o cuyo `collection/README.md` contradiga la metadata — esa última guarda existe porque la contradicción ya pasó.
+
 **`api health` va sin autenticar a propósito**, y por eso es el primer comando a correr: si falla, el problema es la URL y no la credencial. Cualquier otro orden hace que un token malo y un host mal copiado se vean igual.
 
 Los comandos `api` **no aceptan `--url`** —ese es el endpoint MCP— **ni `--raw`**: en REST el cuerpo *es* el payload y no hay sobre JSON-RPC que mostrar. Aceptarlos y no usarlos sería el mismo fallo silencioso que el CLI ya rechaza para los flags mal escritos.
@@ -292,7 +306,9 @@ Los booleanos (`--json`, `--raw`, `--verbose`, `--yes`) no toman valor: se usan 
 
 ### Exit codes
 
-`0` ok · `1` la herramienta devolvió `isError` · `2` uso o configuración · `3` transporte, auth o rate limit.
+`0` ok · `1` la herramienta devolvió `isError`, o `api collection --check` encontró deriva · `2` uso o configuración · `3` transporte, auth o rate limit.
+
+El `1` es siempre lo mismo: **la operación se hizo y el resultado es negativo**. No lo usa `api doctor`, que sale con `0` aunque falten scopes — ahí el informe *es* el resultado, y una key incompleta no es un fallo del comando.
 
 Pensado para scriptear: `node.exe sq-test.mjs search --kb X --q Y --json | jq -r '.[].slug'`.
 
@@ -351,6 +367,8 @@ La referencia pública de las herramientas muestra ejemplos de `tools/call` suel
 | `agent.mjs` | Los seis endpoints del carril agéntico por nombre: sus topes, la memoria del `retrievalId` y la clave de idempotencia. |
 | `doctor.mjs` | El diagnóstico de credencial: qué sondear, cómo clasificar cada fallo y la deducción de qué scope falta. |
 | `doctor-smoke.mjs` | Ejercita esa deducción con sondeos fabricados, sin red ni credencial. Corre en el CI. |
+| `collection-sync.mjs` | Trae la colección publicada y la contrasta con la empaquetada. |
+| `collection-lint.mjs` | Las guardas sobre la colección: variables, defaults inalcanzables, y que la prosa no contradiga la metadata. |
 | `collection/` | La colección Postman pública y su entorno, más cómo se usa y cómo se mantiene. |
 | `sq-test.mjs` | El CLI: flags, subcomandos, formato, exit codes. |
 | `.env.example` | Plantilla de configuración. |

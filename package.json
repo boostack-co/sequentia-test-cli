@@ -36,6 +36,8 @@
     "catalog.mjs",
     "agent.mjs",
     "doctor.mjs",
+    "collection-sync.mjs",
+    "collection-lint.mjs",
     "collection/",
     "doctor-smoke.mjs",
     "menu-smoke.mjs",
@@ -46,6 +48,7 @@
     "tools": "node sq-test.mjs tools",
     "kbs": "node sq-test.mjs list-kbs",
     "smoke": "node menu-smoke.mjs 1 1 \"\" b q",
-    "doctor": "node sq-test.mjs api doctor"
+    "doctor": "node sq-test.mjs api doctor",
+    "lint:collection": "node collection-lint.mjs"
   }
 }

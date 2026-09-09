@@ -54,6 +54,19 @@ export const URL_KEY = "SQ_TEST_URL";
  */
 export const API_URL_KEY = "SQ_TEST_API_URL";
 
+/**
+ * La URL de lectura de la colección publicada, con su access key.
+ *
+ * Tampoco tiene default, y por ahora es porque **la colección todavía no está
+ * publicada**: el día que lo esté, un maintainer pone acá la URL del workspace
+ * público y este comando anda sin configurar nada. Ver `collection/PUBLISHING.md`.
+ *
+ * La access key es de solo lectura y de una sola colección, así que es
+ * publicable. La API key de Postman de quien publica NO: no entra al repo, y el
+ * job `secretos` del CI la rechazaría.
+ */
+export const COLLECTION_URL_KEY = "SQ_TEST_COLLECTION_URL";
+
 // ---------------------------------------------------------------------------
 // Parser de .env
 // ---------------------------------------------------------------------------
@@ -197,6 +210,10 @@ export function plantillaEnv() {
     "# Sin barra final y sin /api/v1: cada ruta ya lo agrega.",
     "# No es el endpoint MCP de abajo: suele ser otro host.",
     `${API_URL_KEY}=`,
+    "",
+    "# Opcional: la colección publicada en Postman, para  api collection --check .",
+    "# Lleva su access key, que es de solo lectura y de una sola colección.",
+    `# ${COLLECTION_URL_KEY}=`,
     "",
     "# Opcional: solo si apuntás a un despliegue propio de Sequentia.",
     `# ${URL_KEY}=${DEFAULT_URL}`,

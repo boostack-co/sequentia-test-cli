@@ -17,6 +17,7 @@ import { stdin, stdout } from "node:process";
 import { SequentiaMcpClient, McpToolError, McpTransportError } from "./mcp-client.mjs";
 import { SequentiaApiClient, ApiTransportError } from "./api-client.mjs";
 import { diagnosticar, formatearInforme } from "./doctor.mjs";
+import { CACHE_FILE, SyncError, catalogoDe, comparar, formatearDerivas, guardarCache, traerPublicada } from "./collection-sync.mjs";
 import {
   AGENT_COMMANDS,
   RETRIEVAL_TTL_MS,
@@ -33,10 +34,12 @@ import {
   necesitaConfirmacion,
   resolverPeticion,
 } from "./catalog.mjs";
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import {
   API_URL_KEY,
+  COLLECTION_URL_KEY,
   COMMANDS,
   DEFAULT_URL,
   PLACEHOLDER_KB_ID,
@@ -64,7 +67,7 @@ const EXIT_TRANSPORT = 3;
 // ---------------------------------------------------------------------------
 // Parser de argumentos
 // ---------------------------------------------------------------------------
-const BOOLEAN_FLAGS = new Set(["json", "raw", "verbose", "yes", "help"]);
+const BOOLEAN_FLAGS = new Set(["json", "raw", "verbose", "yes", "help", "check", "refresh"]);
 
 /**
  * Alias cortos. Son booleanos: nunca pueden ser el valor de otra opción.
@@ -123,6 +126,11 @@ const API_SUBCOMMANDS = {
   doctor: {
     help: "Perfila la credencial: qué scopes tiene y dónde se consigue lo que falta.",
     opts: [],
+    posicionales: 2,
+  },
+  collection: {
+    help: "Contrasta la colección empaquetada con la publicada:  api collection --check [--refresh]",
+    opts: ["check", "refresh"],
     posicionales: 2,
   },
   run: {
@@ -490,6 +498,50 @@ async function comandoApi(flags, positional) {
     return informe.celda.alcanzable ? EXIT_OK : EXIT_TRANSPORT;
   }
 
+  if (sub === "collection") {
+    if (!flags.check && !flags.refresh) {
+      throw new UsageError(
+        `"api collection" necesita --check o --refresh.\n` +
+          `  --check    contrasta la colección empaquetada con la publicada\n` +
+          `  --refresh  además guarda lo traído en ${CACHE_FILE}`,
+      );
+    }
+    const { values: dotenv } = loadDotenv();
+    const url = process.env[COLLECTION_URL_KEY] ?? dotenv[COLLECTION_URL_KEY];
+    if (!url) {
+      throw new UsageError(
+        `Falta ${COLLECTION_URL_KEY}: la URL de lectura de la colección publicada.\n` +
+          "  Es la de la API de Postman con su access key, algo con la forma\n" +
+          "  https://api.postman.com/collections/<uid>?access_key=<key>\n" +
+          "  Mientras la colección no esté publicada, este comando no tiene con qué contrastar.\n" +
+          "  Ver collection/PUBLISHING.md.",
+      );
+    }
+
+    if (onDebug) onDebug(`trayendo ${url.replace(/access_key=[^&]*/, "access_key=…")}`);
+    const publicada = await traerPublicada(url);
+    // `cargarCatalogo` lee de un archivo, así que lo traído se escribe antes de
+    // compararlo. Con --refresh eso queda en la caché del usuario; sin él va a
+    // un temporal, porque `--check` es de solo lectura y no debe dejar rastro.
+    const destino = flags.refresh ? guardarCache(publicada) : join(tmpdir(), `sq-test-coleccion-${process.pid}.json`);
+    const remoto = catalogoDe(publicada, destino);
+    const local = cargarCatalogo();
+    const derivas = comparar(local, remoto);
+
+    if (!flags.refresh) rmSync(destino, { force: true });
+
+    if (flags.json) {
+      console.log(JSON.stringify({ derivas, cache: flags.refresh ? destino : null }, null, 2));
+    } else {
+      console.log(formatearDerivas(derivas).join("\n"));
+      if (flags.refresh) console.log(`\nCaché en ${destino}`);
+    }
+    // Una deriva no es un fallo del comando: es su hallazgo. Pero tiene que
+    // poder romper un CI, así que sale con 1 — el mismo código que usa el CLI
+    // para "la operación se hizo y el resultado es negativo".
+    return derivas.length ? EXIT_TOOL_ERROR : EXIT_OK;
+  }
+
   if (sub === "list") {
     // No necesita credencial ni red: la colección viaja en el paquete. Es el
     // análogo REST de `tools`, salvo que `tools` pregunta al servidor y esto
@@ -738,7 +790,7 @@ try {
     if (parsedFlags.raw && err.envelope) console.log(JSON.stringify(err.envelope, null, 2));
     console.error(`La herramienta ${err.tool} devolvió un error:\n  ${err.message}`);
     process.exitCode = EXIT_TOOL_ERROR;
-  } else if (err instanceof McpTransportError || err instanceof ApiTransportError) {
+  } else if (err instanceof McpTransportError || err instanceof ApiTransportError || err instanceof SyncError) {
     console.error(`Error de transporte: ${err.message}`);
     if (err.wwwAuthenticate) console.error(`  WWW-Authenticate: ${err.wwwAuthenticate}`);
     if (err.body) console.error(`  Respuesta: ${String(err.body).slice(0, 500)}`);
