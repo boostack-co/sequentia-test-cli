@@ -41,6 +41,7 @@
     "doctor.mjs",
     "collection-sync.mjs",
     "collection-lint.mjs",
+    "collection-sync-smoke.mjs",
     "collection/",
     "doctor-smoke.mjs",
     "loop.mjs",
@@ -55,6 +56,7 @@
     "kbs": "node sq-test.mjs list-kbs",
     "smoke": "node menu-smoke.mjs 1 1 \"\" b q",
     "doctor": "node sq-test.mjs api doctor",
-    "lint:collection": "node collection-lint.mjs"
+    "lint:collection": "node collection-lint.mjs",
+    "smoke:sync": "node collection-sync-smoke.mjs"
   }
 }

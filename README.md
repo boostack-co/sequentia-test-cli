@@ -461,6 +461,7 @@ La referencia pública de las herramientas muestra ejemplos de `tools/call` suel
 | `doctor-smoke.mjs` | Ejercita esa deducción con sondeos fabricados, sin red ni credencial. Corre en el CI. |
 | `collection-sync.mjs` | Trae la colección publicada y la contrasta con la empaquetada. |
 | `collection-lint.mjs` | Las guardas sobre la colección: variables, defaults inalcanzables, y que la prosa no contradiga la metadata. |
+| `collection-sync-smoke.mjs` | Ejercita el comparador sirviendo la colección —mutada a propósito— desde `127.0.0.1`, sin Postman ni credenciales. Corre en el CI. |
 | `loop.mjs` | El bucle: los contratos de respuesta, la política de riesgo y la traza. |
 | `loop-smoke.mjs` | Ejercita esa política y esos contratos con respuestas fabricadas, sin red ni modelo. Corre en el CI. |
 | `collection/` | La colección Postman pública y su entorno, más cómo se usa y cómo se mantiene. |
