@@ -13,6 +13,10 @@
  * esconde.
  */
 
+// El tope de `claimText` sale de `agent.mjs`, que es donde vive el contrato
+// del carril agéntico. Repetirlo acá daría dos fuentes para el mismo número,
+// y la que quedara vieja dejaría pasar lo que el servidor rechaza.
+import { VERIFY_CLAIM_MAX } from "./agent.mjs";
 import { UsageError, loadDotenv } from "./commands.mjs";
 
 /** La única cifra de política. Todo lo demás se deriva de la respuesta. */
@@ -278,9 +282,13 @@ export const DECLINACION = "NO_HAY_EVIDENCIA_SUFICIENTE";
  * No lanza por una decisión: escalar es un resultado, no un error. Sí propaga
  * los fallos de llamada, que son otra cosa.
  */
-export async function correrBucle({ client, pregunta, kb, opciones, onPaso = () => {} }) {
+export async function correrBucle({ client, pregunta, kb, opciones, onPaso = () => {}, traza = [] }) {
   const { umbral, generarRespuesta, gestionado, maxResults } = opciones;
-  const traza = [];
+  // La traza la puede aportar el llamante, y bajo `--json` **tiene** que
+  // hacerlo: si el bucle lanza a mitad de camino, lo anotado hasta ahí es lo
+  // único que explica dónde murió. Devolverla solo al terminar bien dejaría
+  // esa salida sin documento, y cero bytes es indistinguible de un proceso
+  // que se murió.
   const anotar = (paso) => {
     traza.push(paso);
     onPaso(paso);
@@ -327,7 +335,10 @@ export async function correrBucle({ client, pregunta, kb, opciones, onPaso = () 
   // variable de entorno.
   const llm = opciones.llm;
   const t2 = performance.now();
-  const respuesta = await generar(llm, armarMensajes(pregunta, rec.chunks), { onDebug: opciones.onDebug });
+  const crudo = await generar(llm, armarMensajes(pregunta, rec.chunks), { onDebug: opciones.onDebug });
+  // Se recorta ACA, una sola vez, y lo recortado es lo que se mide y lo que se
+  // manda. Medir una cosa y enviar otra es la trampa del tope de `claimText`.
+  const respuesta = crudo.trim();
   anotar({
     paso: "generar",
     ok: true,
@@ -346,6 +357,22 @@ export async function correrBucle({ client, pregunta, kb, opciones, onPaso = () 
       ok: true,
       decision: "escalar",
       motivo: "el modelo declinó por evidencia insuficiente; no hay afirmación que verificar",
+    });
+    return traza;
+  }
+
+  // --- 2b. Las cuatro negativas, ANTES de verificar -------------------------
+  // Mandar cualquiera de estas a `/verify` produce un veredicto que no habla de
+  // lo que el agente va a enviar. Y ninguna archiva un hueco de conocimiento:
+  // la KB no tiene la culpa de que el modelo invente una cita.
+  const negativa = revisarAntesDeVerificar(respuesta, rec.chunks.length);
+  if (negativa) {
+    anotar({
+      paso: "decidir",
+      ok: true,
+      decision: "escalar",
+      motivo: negativa,
+      culpa: "modelo",
     });
     return traza;
   }
@@ -400,15 +427,18 @@ export function decisionDe(traza) {
 /**
  * La narración de un paso, para stderr.
  *
- * La respuesta del modelo NO se imprime acá: es texto que viene de fuera y su
- * escapado es trabajo de S6. Hasta entonces solo se dice cuánto mide.
+ * La respuesta del modelo se imprime como **bloque citado**: viene de fuera, y
+ * el prefijo es lo único que le quita la columna donde una línea suya podría
+ * significar «esto lo dijo el bucle».
  */
-export function narrar(paso, { mostrarEvidencia = false } = {}) {
+export function narrar(paso, { mostrarEvidencia = false, mostrarRespuesta = false } = {}) {
   switch (paso.paso) {
     case "recuperar":
       return `· recuperar   ${paso.fragmentos} fragmentos · ${paso.ms} ms${paso.retrievalId ? ` · id ${paso.retrievalId}` : ""}`;
-    case "generar":
-      return `· generar     ${paso.caracteres} caracteres con ${paso.modelo} · ${paso.ms} ms${paso.declino ? " · DECLINÓ" : ""}`;
+    case "generar": {
+      const cabecera = `· generar     ${paso.caracteres} caracteres con ${paso.modelo} · ${paso.ms} ms${paso.declino ? " · DECLINÓ" : ""}`;
+      return mostrarRespuesta ? `${cabecera}\n${bloqueCitado(paso.respuesta)}` : cabecera;
+    }
     case "verificar": {
       const r = paso.riesgo === null ? "sin riesgo declarado" : `riesgo ${paso.riesgo.toFixed(2)} (${paso.riesgoVia})`;
       const n = paso.evidencia.length;
@@ -417,9 +447,207 @@ export function narrar(paso, { mostrarEvidencia = false } = {}) {
     }
     case "contrastar":
       return `· contrastar  el carril gestionado devolvió ${paso.caracteres} caracteres · ${paso.ms} ms`;
-    case "decidir":
-      return `\nDECISION: ${paso.decision.toUpperCase()}\n  ${paso.motivo}`;
+    case "decidir": {
+      // El motivo puede traer texto del modelo (los marcadores que citó, por
+      // ejemplo). Se escapa acá, en el límite de la impresión, y no donde se
+      // arma el mensaje: los mensajes se componen en muchos lugares y solo este
+      // sabe que lo que sigue va a una terminal.
+      const culpa = paso.culpa === "modelo" ? "  (es del modelo, no de la KB: no se archiva ningún hueco)\n" : "";
+      return `\nDECISION: ${paso.decision.toUpperCase()}\n${culpa}  ${escaparControles(paso.motivo)}`;
+    }
     default:
       return `· ${paso.paso}`;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Las cuatro negativas previas a verificar
+// ---------------------------------------------------------------------------
+/**
+ * Hay respuestas que **no son verificables**, y mandarlas a `/verify` produce
+ * un veredicto que no habla de lo que el agente va a enviar.
+ *
+ * Ninguna de las cuatro archiva un hueco de conocimiento, y eso es deliberado:
+ * **la KB no tiene la culpa de que el modelo invente una cita.** Archivar un
+ * hueco acá mandaría a un curador a escribir un artículo sobre una pregunta
+ * que la KB quizá ya cubre.
+ */
+
+/** Los marcadores `[n]` que la respuesta usa, en orden de aparición. */
+export function citasDe(texto) {
+  return [...String(texto).matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1]));
+}
+
+/**
+ * 1. Un `[7]` cuando nunca se le dieron siete fuentes.
+ *
+ * `/verify` **no lo puede cazar**: hace su propia recuperación y juzga la
+ * afirmación, así que puede devolver `supported` sobre evidencia que el lector
+ * nunca vio. La cita inventada es justamente lo que el lector usaría para
+ * comprobarla.
+ */
+export function citaFueraDeRango(respuesta, fuentes) {
+  const malas = citasDe(respuesta).filter((n) => n < 1 || n > fuentes);
+  if (!malas.length) return null;
+  return (
+    `el modelo citó ${malas.map((n) => `[${n}]`).join(", ")} y solo se le dieron ${fuentes} fuente(s).\n` +
+    "  /verify no lo cazaría: hace su propia recuperación y juzga la afirmación, así que\n" +
+    "  puede devolver `supported` sobre evidencia que el lector nunca vio."
+  );
+}
+
+/**
+ * 2. Ninguna cita, y tampoco la declinación explícita.
+ *
+ * Es política visible hacia afuera —una respuesta sin procedencia no se manda—
+ * y no una exigencia de formato: por eso la declinación, que tampoco trae
+ * citas, está exenta.
+ */
+export function sinCitas(respuesta) {
+  if (respuesta.includes(DECLINACION)) return null;
+  if (citasDe(respuesta).length) return null;
+  return (
+    "el modelo no citó ninguna fuente y tampoco declinó.\n" +
+    "  Una respuesta sin procedencia no se puede comprobar, y mandarla igual convierte\n" +
+    "  al verificador en un sello de goma."
+  );
+}
+
+/**
+ * 3. Un subrogado suelto.
+ *
+ * `JSON.parse` los acepta, así que **cualquier** respuesta puede traer uno; el
+ * encoder que arma el cuerpo de `/verify` los reemplaza por U+FFFD.
+ * Sustituirlo sería pedirle a `/verify` un veredicto sobre una afirmación que
+ * el modelo nunca hizo.
+ */
+export function noCodificable(respuesta) {
+  // Un alto sin su bajo detrás, o un bajo sin su alto delante.
+  const suelto = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  if (!suelto.test(respuesta)) return null;
+  return (
+    "la respuesta trae un subrogado suelto y no se puede codificar como UTF-8.\n" +
+    "  El encoder del cuerpo lo reemplazaría por U+FFFD, así que /verify juzgaría una\n" +
+    "  afirmación que el modelo nunca hizo."
+  );
+}
+
+/**
+ * 4. Por encima del tope de `claimText`.
+ *
+ * **No se trunca**: un veredicto sobre los primeros 4000 caracteres no cubre lo
+ * que el agente manda.
+ *
+ * Se mide **exactamente lo que se envía**, que es el texto ya recortado por
+ * `String.prototype.trim`. Medir una cosa y mandar otra es la trampa acá: las
+ * definiciones de «espacio en blanco» no coinciden entre runtimes, y la
+ * diferencia son unos pocos caracteres — suficientes para dejar pasar una
+ * afirmación que el servidor habría rechazado. Recortando y midiendo con la
+ * misma operación, lo medido y lo enviado son el mismo string por construcción.
+ */
+export function demasiadoLarga(respuesta) {
+  const n = respuesta.length;
+  if (n <= VERIFY_CLAIM_MAX) return null;
+  return (
+    `la respuesta tiene ${n} unidades UTF-16 y /verify acepta ${VERIFY_CLAIM_MAX}.\n` +
+    "  No se trunca a propósito: un veredicto sobre los primeros 4000 caracteres no cubre\n" +
+    "  lo que el agente termina mandando."
+  );
+}
+
+/**
+ * Corre las cuatro. Devuelve el motivo de la primera que dispare, o `null`.
+ *
+ * @param {string} respuesta ya recortada — la misma que se va a enviar
+ * @param {number} fuentes cuántos fragmentos se le dieron al modelo
+ */
+export function revisarAntesDeVerificar(respuesta, fuentes) {
+  for (const revisar of [
+    () => demasiadoLarga(respuesta),
+    () => noCodificable(respuesta),
+    () => citaFueraDeRango(respuesta, fuentes),
+    () => sinCitas(respuesta),
+  ]) {
+    const motivo = revisar();
+    if (motivo) return motivo;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Escapado de lo que llega a la terminal
+// ---------------------------------------------------------------------------
+/**
+ * Tres superficies distintas, y **no se defienden con lo mismo**. Confundirlas
+ * es lo que deja un agujero: escapar controles no impide una falsificación
+ * hecha de texto imprimible, y un prefijo de bloque no vuelve seguro un comando.
+ */
+
+/**
+ * C0 y C1, que es lo que una terminal puede llegar a interpretar.
+ *
+ * El salto de línea queda FUERA a propósito: los saltos los maneja quien
+ * imprime, que es el único que sabe cuáles son suyos. La tabulación también
+ * queda fuera — no mueve el cursor a otra línea, así que no puede reescribir
+ * lo ya impreso.
+ */
+const CONTROLES = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g;
+
+/**
+ * 1. Caracteres de control, porque una terminal **actúa** sobre algunos.
+ *
+ * La secuencia `ESC [ 2 K` borra la línea entera: metida en un fragmento de la
+ * KB, puede borrar la línea de escalado y dejar en su lugar un
+ * `DECISION: MANDAR` falso. Se escapan a su forma visible en vez de quitarse,
+ * para que se vea que estaban.
+ */
+export function escaparControles(texto) {
+  return String(texto).replace(CONTROLES, (c) => "\\x" + c.charCodeAt(0).toString(16).padStart(2, "0"));
+}
+
+/** El prefijo de cita. Marca la columna que significa «esto NO lo dijo el bucle». */
+export const PREFIJO_CITA = "  | ";
+
+/**
+ * 2. La respuesta del modelo, como bloque citado.
+ *
+ * Los saltos de línea solo se pueden defender donde el código sabe cuáles son
+ * suyos. Cada byte de una falsificación —una línea que diga `DECISION: MANDAR`—
+ * es texto imprimible corriente, así que **escapar controles no la toca**: hace
+ * falta el prefijo, que le quita la columna donde esa línea significaría algo.
+ */
+export function bloqueCitado(texto, prefijo = PREFIJO_CITA) {
+  return escaparControles(texto)
+    .split("\n")
+    .map((linea) => prefijo + linea)
+    .join("\n");
+}
+
+/**
+ * 3. El comando copiable, que tiene **dos requisitos en direcciones opuestas**.
+ *
+ * Seguro de **ejecutar**: hay que citar, porque `;` y `$(...)` son texto
+ * imprimible y el citado es lo único que los desarma.
+ *
+ * Seguro de **copiar**: un carácter de control sobrevive al citado —las
+ * comillas no lo neutralizan, solo lo envuelven— y después hay que escaparlo
+ * para imprimirlo, con lo que el comando pegado llevaría un id **distinto** del
+ * real. Y no escaparlo es peor: la terminal lo interpreta al pegarlo.
+ *
+ * No hay orden de las dos operaciones que arregle las dos cosas, así que un
+ * valor que no puede ser ambas **se declina**: se imprime un placeholder y una
+ * línea dice cuál se rechazó. Un comando que no reproduce la acción es peor que
+ * no imprimir ninguno — es la invariante 1 al revés.
+ */
+export function valorSeguroParaComando(valor) {
+  const s = String(valor);
+  // La bandera /g hace que `test` recuerde dónde quedó entre llamadas.
+  CONTROLES.lastIndex = 0;
+  if (CONTROLES.test(s)) {
+    return {
+      seguro: false,
+      motivo: "trae caracteres de control: citarlo no los desarma, y escaparlos cambiaría el valor",
+    };
+  }
+  return { seguro: true, valor: s };
 }
