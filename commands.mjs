@@ -12,6 +12,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeApiBase } from "./api-client.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -42,6 +43,16 @@ export const QUERY_MODES = ["fast", "standard", "precise"];
 /** Claves del `.env`. `SQ_TEST_URL` solo hace falta contra otro despliegue. */
 export const TOKEN_KEY = "SQ_TEST_TOKEN";
 export const URL_KEY = "SQ_TEST_URL";
+
+/**
+ * El origen de la celda para el carril REST (`/api/v1`).
+ *
+ * No tiene default, y no es un olvido: el endpoint MCP es un gateway universal
+ * —el mismo para todos—, pero la API REST se sirve desde la celda del cliente,
+ * así que no hay ningún valor razonable que poner. Un default acá sería un host
+ * ajeno recibiendo tu API key como bearer token.
+ */
+export const API_URL_KEY = "SQ_TEST_API_URL";
 
 // ---------------------------------------------------------------------------
 // Parser de .env
@@ -124,6 +135,52 @@ export function resolveConfig(flags = {}) {
 }
 
 /**
+ * Config del carril REST. Se resuelve aparte de `resolveConfig` a propósito:
+ * son dos endpoints distintos, y exigir el de la API para correr un comando MCP
+ * (o al revés) obligaría a configurar algo que ese comando no usa.
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.requireToken] `api health` corre sin credencial, que es
+ *   justamente lo que lo vuelve el primer diagnóstico: si falla, es la URL.
+ */
+export function resolveApiConfig(flags = {}, { requireToken = true } = {}) {
+  const { values: dotenv, files: envFiles } = loadDotenv();
+  const pick = (key) => process.env[key] ?? dotenv[key];
+
+  const raw = flags["api-url"] ?? pick(API_URL_KEY);
+  if (!raw) {
+    throw new UsageError(
+      "Falta la URL de la celda para el carril API.\n" +
+        `  Poné ${API_URL_KEY} en ${USER_ENV_FILE}, exportala, o pasá --api-url.\n` +
+        "  Es el origen DIRECTO de tu celda (algo como https://f1-t1-g01-c001.sequentia.co),\n" +
+        "  sin barra final y sin /api/v1: cada ruta ya lo agrega.\n" +
+        `  No es el endpoint MCP (${URL_KEY}), que suele ser otro host.` +
+        (envFiles.length ? `\n  Config leída de: ${envFiles.join(", ")}` : "\n  (no se encontró ningún .env)"),
+    );
+  }
+
+  let apiUrl;
+  try {
+    apiUrl = normalizeApiBase(raw);
+  } catch (err) {
+    // Una URL ilegible es un error de configuración (exit 2), no de transporte:
+    // no se llegó a hablar con nadie.
+    throw new UsageError(`${API_URL_KEY} no sirve: ${err.message}`);
+  }
+
+  const token = flags.token ?? pick(TOKEN_KEY) ?? null;
+  if (requireToken && !token) {
+    throw new UsageError(
+      "Falta la API key.\n" +
+        `  Corré  sq-test init  para crear ${USER_ENV_FILE}, y poné ahí ${TOKEN_KEY}.\n` +
+        `  También sirve exportar ${TOKEN_KEY} como variable de entorno, o pasar --token.` +
+        (envFiles.length ? `\n  Config leída de: ${envFiles.join(", ")}` : "\n  (no se encontró ningún .env)"),
+    );
+  }
+  return { apiUrl, token, envFiles };
+}
+
+/**
  * Plantilla del `.env` del usuario. Se genera en código y no copiando
  * `.env.example`, para que no dependa de que ese archivo viaje en el paquete
  * instalado ni pueda quedar desfasada.
@@ -135,6 +192,11 @@ export function plantillaEnv() {
     "",
     "# Tu API key de Sequentia.",
     `${TOKEN_KEY}=`,
+    "",
+    "# El origen DIRECTO de tu celda, para el carril API (/api/v1).",
+    "# Sin barra final y sin /api/v1: cada ruta ya lo agrega.",
+    "# No es el endpoint MCP de abajo: suele ser otro host.",
+    `${API_URL_KEY}=`,
     "",
     "# Opcional: solo si apuntás a un despliegue propio de Sequentia.",
     `# ${URL_KEY}=${DEFAULT_URL}`,

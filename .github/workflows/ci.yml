@@ -89,6 +89,17 @@ jobs:
           esperar 2 node sq-test.mjs hasOwnProperty
           esperar 2 node sq-test.mjs call get_user_preferences '{}' sobra
 
+          # Carril API. Ninguno toca la red: fallan en el parseo o en la config.
+          esperar 2 node sq-test.mjs api                                  # falta el subcomando
+          esperar 2 node sq-test.mjs api nada                             # subcomando inexistente
+          esperar 2 node sq-test.mjs api hasOwnProperty                   # y tampoco por el prototipo
+          esperar 2 node sq-test.mjs api health sobra                     # posicional de más
+          esperar 2 node sq-test.mjs api health --raw                     # en REST no hay sobre que mostrar
+          esperar 2 node sq-test.mjs api health --url https://x.invalid   # --url es el endpoint MCP
+          esperar 2 node sq-test.mjs api health --json=quizas             # booleano con valor inválido
+          esperar 2 node sq-test.mjs api health --api-url no-es-una-url   # URL ilegible = config, no transporte
+          esperar 2 node sq-test.mjs api health                           # falta SQ_TEST_API_URL
+
       - name: init crea la config del usuario
         shell: bash
         run: |
