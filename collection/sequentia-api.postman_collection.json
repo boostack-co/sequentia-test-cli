@@ -1,0 +1,461 @@
+{
+  "info": {
+    "_postman_id": "5c2f9a10-6d3b-4f57-9a21-8b0d7e4c1f30",
+    "name": "Sequentia API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Las superficies de Sequentia que aceptan **API key**: la REST bajo `/api/v1`, incluido el carril agéntico.\n\nSe importa, se rellenan tres variables y corre contra tu workspace. Antes de darle a «Run folder», leé `collection/README.md`: hay peticiones que **escriben** en tu workspace y otras que **gastan créditos de IA**, y no hay peticiones de limpieza.\n\nEmpezá por `System → Health`, que es la única sin credencial: si falla ahí, el problema es la URL y no la key.\n\nCada petición declara en su descripción un bloque `sq-test` legible por máquina, con los scopes que necesita, qué persiste y si gasta créditos. Ese bloque es lo que lee el CLI `sequentia-test-cli`, que usa esta colección como catálogo ejecutable."
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{apiKey}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "articleId", "value": "", "type": "string" },
+    { "key": "retrievalId", "value": "", "type": "string" },
+    { "key": "retrievalIdAt", "value": "", "type": "string" },
+    { "key": "retrievalIdKb", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "System",
+      "description": "El primer diagnóstico. `Health` no lleva credencial a propósito: separa «la URL está mal» de «la key está mal», que es la confusión que más tiempo cuesta.",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "auth": { "type": "noauth" },
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/health", "host": ["{{baseUrl}}"], "path": ["api", "v1", "health"] },
+            "description": "Comprueba que la celda responde. **No usa credencial**, así que un fallo acá señala `baseUrl` y no `apiKey`. Corré ésta primero, siempre.\n\n```sq-test\n{\"scopes\":[],\"auth\":false,\"persists\":null,\"spendsCredits\":false}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "Health (vector)",
+          "request": {
+            "method": "GET",
+            "auth": { "type": "noauth" },
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/health/vector", "host": ["{{baseUrl}}"], "path": ["api", "v1", "health", "vector"] },
+            "description": "Estado del almacenamiento vectorial, que es de lo que depende toda recuperación. Tampoco lleva credencial.\n\n```sq-test\n{\"scopes\":[],\"auth\":false,\"persists\":null,\"spendsCredits\":false}\n```"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Knowledge Bases",
+      "description": "Lectura de la REST pública. Nada de acá escribe ni gasta créditos.",
+      "item": [
+        {
+          "name": "List knowledge bases",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Se captura el primer id SOLO con respuesta exitosa: los cuerpos de error",
+                  "// de este carril también pueden traer campos con forma de id, y guardar uno",
+                  "// de esos dejaría las peticiones siguientes apuntando a nada.",
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  try {",
+                  "    const body = pm.response.json();",
+                  "    const kbs = Array.isArray(body) ? body : (body && body.knowledgeBases) || [];",
+                  "    if (kbs.length && kbs[0].id && !pm.variables.get('kbId')) {",
+                  "      console.log('Primera KB disponible: ' + kbs[0].id + ' (' + (kbs[0].name || kbs[0].slug || '') + ')');",
+                  "      console.log('Copiala a la variable kbId del entorno para correr el resto.');",
+                  "    }",
+                  "  } catch (e) {",
+                  "    console.error('La respuesta no era JSON: ' + e.message);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/knowledge-bases", "host": ["{{baseUrl}}"], "path": ["api", "v1", "knowledge-bases"] },
+            "description": "Las knowledge bases que alcanza tu key. **Corré ésta segunda**: de acá sale el `kbId` que necesita casi todo lo demás. La consola imprime el primer id para que lo copies al entorno.\n\nLo que ves acá no es «todo el workspace», sino lo que la **lista blanca de KBs de la credencial** permite.\n\n```sq-test\n{\"scopes\":[\"kb.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "Get knowledge base",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "knowledge-bases", "{{kbId}}"]
+            },
+            "description": "Detalle de una KB.\n\nUn `404` acá no significa necesariamente que el id no exista: el servidor responde **lo mismo** para una KB inexistente y para una de otro workspace, a propósito, para no revelar cuáles existen.\n\n```sq-test\n{\"scopes\":[\"kb.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "List articles",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Captura de `articleId` para que «Get article» sea ejecutable sin copiar a mano.",
+                  "// Solo con 2xx, por lo mismo que en la lista de KBs.",
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  try {",
+                  "    const body = pm.response.json();",
+                  "    const arts = Array.isArray(body) ? body : (body && (body.articles || body.results)) || [];",
+                  "    if (arts.length && arts[0].id) {",
+                  "      pm.collectionVariables.set('articleId', arts[0].id);",
+                  "      console.log('articleId capturado: ' + arts[0].id);",
+                  "    }",
+                  "  } catch (e) {",
+                  "    console.error('La respuesta no era JSON: ' + e.message);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/articles?q=contraseña&limit=5",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "articles"],
+              "query": [
+                { "key": "q", "value": "contraseña", "description": "El filtro de texto. **Se llama `q`**: un `search=` se ignora en silencio y devuelve el listado entero." },
+                { "key": "limit", "value": "5" }
+              ]
+            },
+            "description": "Listado de artículos, con filtro de texto.\n\n**El parámetro es `q`, no `search`.** Mandar `search=` no da error: devuelve el listado sin filtrar, que es peor que un error porque parece que funcionó.\n\nCaptura el primer `id` en la variable de colección `articleId`.\n\n```sq-test\n{\"scopes\":[\"kb.search\"],\"persists\":null,\"spendsCredits\":false,\"captures\":[\"articleId\"]}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "Get article",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/articles/{{articleId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "articles", "{{articleId}}"]
+            },
+            "description": "Un artículo completo. Usa el `articleId` que capturó «List articles».\n\n`articleId` es una variable **de colección**, no de entorno, y es deliberado: Postman resuelve el entorno primero, así que declararla allí —aunque fuera vacía— le ganaría a la captura y mandaría `/articles/`, que el servidor rutea al **listado**: un `200` con la carga equivocada.\n\n```sq-test\n{\"scopes\":[\"articles.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "Query knowledge base (léxica)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"¿cómo restablezco la contraseña de un usuario?\",\n  \"maxResults\": 5,\n  \"includeMetadata\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/query",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "query"]
+            },
+            "description": "Búsqueda **léxica** dentro de una KB. El nombre engaña: pese a llamarse `query` y pedir `rag.query`, **no sintetiza nada y no gasta créditos de IA**. Para la respuesta generada está el carril agéntico.\n\nEl cuerpo acepta `query`, `maxResults` e `includeMetadata`. Un `limit` se descarta en silencio.\n\n```sq-test\n{\"scopes\":[\"rag.query\"],\"persists\":null,\"spendsCredits\":false}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "Analytics summary",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/analytics",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "analytics"]
+            },
+            "description": "Resumen de uso de la KB.\n\nPide `analytics.read`, que **no está** entre los scopes del formulario de Agent Playground: una key creada ahí, con todas las casillas marcadas, igual falla acá.\n\n```sq-test\n{\"scopes\":[\"analytics.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "Analytics — searches",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/analytics/searches",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "analytics", "searches"]
+            },
+            "description": "Qué se buscó en esta KB.\n\n```sq-test\n{\"scopes\":[\"analytics.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "Analytics — feedback",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/analytics/feedback",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "analytics", "feedback"]
+            },
+            "description": "El lado de lectura de lo que escribe `Agent API → Feedback`. Sirve para comprobar que una calificación aterrizó donde se esperaba — y para ver el daño si aterrizó en la KB equivocada.\n\n```sq-test\n{\"scopes\":[\"analytics.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "Analytics — top articles",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/analytics/top-articles",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "analytics", "top-articles"]
+            },
+            "description": "Los artículos más servidos.\n\n```sq-test\n{\"scopes\":[\"analytics.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "Knowledge gaps",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/gaps",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "gaps"]
+            },
+            "description": "La cola de huecos de conocimiento — el lado de lectura de lo que escribe `Agent API → Gap report`.\n\n**Pide `gaps.read`, y ese scope no se puede conceder desde ningún formulario de Admin Studio.** Es distinto de `gaps.write`: escribir un hueco es clicable, leer la cola no. Si esta petición da `403` con una key que sí puede reportar huecos, es esto y no un error tuyo.\n\n```sq-test\n{\"scopes\":[\"gaps.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "Knowledge gaps — stats",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/gaps/stats",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "gaps", "stats"]
+            },
+            "description": "Agregados de la cola de huecos. Mismo scope de solo-API que la anterior.\n\n```sq-test\n{\"scopes\":[\"gaps.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "Categories (iPaaS)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ipaas/categories/{{kbId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "ipaas", "categories", "{{kbId}}"]
+            },
+            "description": "Las categorías de una KB. Vive bajo el montaje `/api/v1/ipaas`, no bajo el de knowledge bases: es la única de esta carpeta que no comparte prefijo con las demás.\n\n```sq-test\n{\"scopes\":[\"kb.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Agent API",
+      "description": "El carril agéntico. **Acá empieza lo que cuesta y lo que deja rastro**: cuatro de las seis gastan créditos de IA y dos escriben en tu workspace. La carpeta está en orden de ejecución: `Retrieve` captura el `retrievalId` que `Feedback` necesita.\n\nEl reparto que este carril soporta es: Sequentia **recupera** y **verifica**, tu modelo **genera**, y vos **decidís** qué hacer con el veredicto.",
+      "item": [
+        {
+          "name": "1. Retrieve",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// El `retrievalId` se captura SOLO con respuesta exitosa. Este carril lo",
+                  "// incluye también en los cuerpos de 402, 500 y 502: capturarlo de uno de",
+                  "// esos ataría un feedback posterior a una consulta que no produjo respuesta.",
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "  try {",
+                  "    const body = pm.response.json();",
+                  "    if (body && body.retrievalId) {",
+                  "      pm.collectionVariables.set('retrievalId', body.retrievalId);",
+                  "      // Se guarda CUÁNDO y CONTRA QUÉ KB. El consumidor los mira antes de",
+                  "      // usarlo: calificar con un id de otra KB funciona —el servidor escribe",
+                  "      // lo que diga el cuerpo— y la calificación aterriza en un panel que",
+                  "      // esa recuperación nunca tocó.",
+                  "      pm.collectionVariables.set('retrievalIdAt', String(Date.now()));",
+                  "      pm.collectionVariables.set('retrievalIdKb', String(pm.variables.get('kbId') || ''));",
+                  "      console.log('retrievalId capturado: ' + body.retrievalId);",
+                  "    }",
+                  "  } catch (e) {",
+                  "    console.error('La respuesta no era JSON: ' + e.message);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"¿cómo restablezco la contraseña de un usuario?\",\n  \"knowledgeBaseId\": \"{{kbId}}\",\n  \"maxResults\": 10,\n  \"includeContent\": true\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/agent/retrieve", "host": ["{{baseUrl}}"], "path": ["api", "v1", "agent", "retrieve"] },
+            "description": "Recupera fragmentos con procedencia, **sin generar nada**. Es el primer paso del carril propio: lo que le pasás después a tu modelo.\n\n**Gasta créditos** aunque no sintetice: embebe la consulta en cada llamada.\n\nOjo con dos asimetrías respecto de `Query`, que son `400` si te equivocás:\n\n- acá el campo es `knowledgeBaseId`, **en singular**;\n- `maxResults` llega hasta **50** (en `Query` el tope es 20).\n\n`relevanceScore` puede venir en `null`, y eso significa «el recuperador no emitió similitud», no «irrelevante». Su rango es `[-1, 1]`.\n\n```sq-test\n{\"scopes\":[\"agent.retrieve\",\"rag.query\"],\"persists\":null,\"spendsCredits\":true,\"internalRead\":true,\"captures\":[\"retrievalId\"]}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "2. Verify",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"claimText\": \"Para restablecer la contraseña de un usuario, un administrador entra a la consola y usa la opción de reenvío de invitación.\",\n  \"knowledgeBaseId\": \"{{kbId}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/agent/verify", "host": ["{{baseUrl}}"], "path": ["api", "v1", "agent", "verify"] },
+            "description": "Juzga si una afirmación está **fundamentada** en la KB. Es el paso que ningún framework de agentes te da: la respuesta la generó tu modelo, y esto dice si se puede mandar.\n\nDevuelve `verdict` (`supported` / `unsupported` / `contradicted`), `confidence` y `riskScore`, ambos en `[0, 1]`.\n\nTres cosas que conviene saber antes de leer el resultado:\n\n- **`claimText` topa en 4000 caracteres.** No se trunca del lado del cliente: un veredicto sobre los primeros 4000 no cubriría lo que el agente va a enviar.\n- **No le pases `articleIds` salvo que sepas por qué.** Planta un filtro que el carril de grafo rechaza; `verify` hace su propia recuperación.\n- **Recupera a visibilidad interna** sea cual sea el alcance de tu key, así que la evidencia que devuelve puede incluir contenido que esa key no vería por otras vías. Tratala como interna.\n\n```sq-test\n{\"scopes\":[\"agent.verify\",\"rag.query\"],\"persists\":null,\"spendsCredits\":true}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "3. Query (Sequentia sintetiza)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"¿cómo restablezco la contraseña de un usuario?\",\n  \"knowledgeBaseIds\": [\"{{kbId}}\"],\n  \"options\": {\n    \"maxResults\": 5,\n    \"includeProvenance\": true\n  }\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/agent/query", "host": ["{{baseUrl}}"], "path": ["api", "v1", "agent", "query"] },
+            "description": "La alternativa **gestionada**: Sequentia recupera *y* sintetiza. Está acá **como contraste**, no como recomendación: sirve para ver, en la misma corrida, qué aporta el carril propio.\n\nEl cuerpo no se parece al de `Retrieve`, y el esquema es estricto:\n\n- el campo es **`knowledgeBaseIds`, un array** (de 1 a 10, sin repetidos). Mandar `knowledgeBaseId` en singular es un `400`;\n- `options.maxResults` topa en **20**, no en 50.\n\nAl leer la respuesta: `answer` viene en `null` exactamente cuando `evidence` es `none`, y eso es un **200**, no un error. Y `citations` puede venir no vacío con `evidence: none`, así que para saber si se sirvió algo hay que mirar `sources` / `evidence`, nunca la cantidad de citas.\n\n```sq-test\n{\"scopes\":[\"agent.query\",\"rag.query\"],\"persists\":null,\"spendsCredits\":true,\"internalRead\":true}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "4. Index status",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Accept", "value": "application/json" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/agent/index-status/{{kbId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "agent", "index-status", "{{kbId}}"]
+            },
+            "description": "Cuánto de la KB está indexado. Es la respuesta a «recuperé menos de lo que esperaba»: si todavía está indexando, no falta contenido, falta tiempo.\n\nLa única `GET` del carril, y la única que no cuesta nada.\n\n```sq-test\n{\"scopes\":[\"agent.index_status\",\"kb.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "5. Gap report  ⚠ escribe",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" },
+              {
+                "key": "x-idempotency-key",
+                "value": "postman-gap-{{kbId}}-contrasena",
+                "description": "La clave tiene que cubrir EXACTAMENTE lo mismo que el cuerpo. Más estrecha devuelve 409 durante 24 h; más ancha suprime observaciones que el contador de ocurrencias cuenta."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"knowledgeBaseId\": \"{{kbId}}\",\n  \"gaps\": [\n    {\n      \"query\": \"¿cómo restablezco la contraseña de un usuario?\",\n      \"context\": \"Reportado desde la colección Postman de ejemplo.\",\n      \"priority\": \"low\"\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/agent/gap-report", "host": ["{{baseUrl}}"], "path": ["api", "v1", "agent", "gap-report"] },
+            "description": "⚠ **PERSISTE.** Reporta que la KB no cubre algo. Deja una fila en la cola de triage de tu workspace, que alguien va a ver. **No hay petición de limpieza**: quitarla es trabajo de Admin Studio.\n\nDe fábrica reporta un hueco de ejemplo con `priority: low`. Cambiá el texto o no la corras.\n\nLa cabecera `x-idempotency-key` hace que reintentar no duplique: la ventana es de **24 horas**, y un mismo valor con un cuerpo distinto devuelve `409`.\n\n```sq-test\n{\"scopes\":[\"agent.gap_report\",\"gaps.write\"],\"persists\":\"una fila de hueco de conocimiento en la cola de triage\",\"spendsCredits\":false}\n```"
+          },
+          "response": []
+        },
+        {
+          "name": "6. Feedback  ⚠ escribe",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Tres guardas, y ninguna es cosmética: las tres evitan escribir una fila",
+                  "// que después nadie puede distinguir de una buena.",
+                  "const rid = pm.collectionVariables.get('retrievalId');",
+                  "",
+                  "// 1. Sin id. El campo es OPCIONAL en el esquema, así que un vacío se acepta",
+                  "//    y la fila se escribe igual, ligada a nada, sesgando en silencio la",
+                  "//    analítica de utilidad.",
+                  "if (!rid) {",
+                  "  throw new Error('Sin retrievalId: corré primero «Agent API / 1. Retrieve». El campo es opcional en el esquema, así que un vacío se aceptaría y escribiría una fila ligada a nada.');",
+                  "}",
+                  "",
+                  "// 2. Id viejo. Diez minutos es la política de esta colección, no del servidor.",
+                  "const at = Number(pm.collectionVariables.get('retrievalIdAt'));",
+                  "if (at && Date.now() - at > 10 * 60 * 1000) {",
+                  "  throw new Error('El retrievalId tiene más de diez minutos. Volvé a correr «1. Retrieve» antes de calificar.');",
+                  "}",
+                  "",
+                  "// 3. Id de OTRA KB. Es el caso más silencioso de los tres: el servidor",
+                  "//    escribe la fila con lo que diga el cuerpo, así que consultar la KB A,",
+                  "//    cambiar kbId a B y calificar FUNCIONA — y la calificación aterriza en",
+                  "//    un panel que esa recuperación nunca tocó.",
+                  "const kbCaptura = pm.collectionVariables.get('retrievalIdKb');",
+                  "const kbAhora = String(pm.variables.get('kbId') || '');",
+                  "if (kbCaptura && kbAhora && kbCaptura !== kbAhora) {",
+                  "  throw new Error('El retrievalId se capturó contra la KB ' + kbCaptura + ' y ahora kbId es ' + kbAhora + '. La calificación aterrizaría en una KB que esa recuperación nunca tocó.');",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "x-idempotency-key", "value": "postman-feedback-{{retrievalId}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"knowledgeBaseId\": \"{{kbId}}\",\n  \"retrievalId\": \"{{retrievalId}}\",\n  \"rating\": \"helpful\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/api/v1/agent/feedback", "host": ["{{baseUrl}}"], "path": ["api", "v1", "agent", "feedback"] },
+            "description": "⚠ **PERSISTE.** Califica una recuperación. Deja una fila de feedback que alimenta la analítica de la KB, y **no hay petición de limpieza**.\n\nNo es un paso del bucle: se manda **aparte**, cuando un humano ya leyó la respuesta. Correrlo dentro del bucle mintearía una recuperación nueva y calificaría ésa.\n\nUsa el `retrievalId` que capturó «1. Retrieve», y **se niega a enviar** si falta, si tiene más de diez minutos, o si se capturó contra otra KB. Las tres guardas están en el script de pre-request, con el motivo de cada una.\n\n`rating` solo acepta `helpful` o `not_helpful`.\n\n**Es el único endpoint del carril sin scope de reserva:** `agent.feedback` es la única cadena que lo abre, así que una key que corre todo lo demás puede fallar exactamente acá.\n\n```sq-test\n{\"scopes\":[\"agent.feedback\"],\"persists\":\"una fila de feedback de utilidad en la analítica de la KB\",\"spendsCredits\":false}\n```"
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
