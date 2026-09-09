@@ -158,6 +158,12 @@ node sq-test.mjs api health --json | jq
 
 Se acepta **con y sin `/api/v1`**. No es una comodidad: cada ruta ya empieza con ese prefijo, así que pegar el base URL en la forma en que suele aparecer documentado daba `/api/v1/api/v1/…`, un 404 que se lee como un problema del despliegue y es de configuración.
 
+### La colección Postman
+
+En [`collection/`](collection/) vive la colección pública de la API, con su entorno. Es el mismo artefacto que un cliente importa para tocar la API en cinco minutos sin escribir código, y el que el CLI va a usar como **catálogo ejecutable**: un ejecutor genérico correrá cualquier petición que la colección declare.
+
+Cada petición lleva en su descripción un bloque `sq-test` legible por máquina con sus scopes, qué persiste y si gasta créditos — que es lo que después alimenta la guarda de `--yes`. Ver [`collection/README.md`](collection/README.md) para usarla y [`collection/PUBLISHING.md`](collection/PUBLISHING.md) para mantenerla.
+
 **`api health` va sin autenticar a propósito**, y por eso es el primer comando a correr: si falla, el problema es la URL y no la credencial. Cualquier otro orden hace que un token malo y un host mal copiado se vean igual.
 
 Los comandos `api` **no aceptan `--url`** —ese es el endpoint MCP— **ni `--raw`**: en REST el cuerpo *es* el payload y no hay sobre JSON-RPC que mostrar. Aceptarlos y no usarlos sería el mismo fallo silencioso que el CLI ya rechaza para los flags mal escritos.
@@ -249,6 +255,7 @@ La referencia pública de las herramientas muestra ejemplos de `tools/call` suel
 | :--- | :--- |
 | `mcp-client.mjs` | `SequentiaMcpClient` — transporte reusable (handshake, SSE, sesión, reintentos, errores). Importable desde otros scripts. |
 | `api-client.mjs` | `SequentiaApiClient` — el transporte REST: sin sesión, con la taxonomía de errores del carril API. También importable. |
+| `collection/` | La colección Postman pública y su entorno, más cómo se usa y cómo se mantiene. |
 | `sq-test.mjs` | El CLI: flags, subcomandos, formato, exit codes. |
 | `.env.example` | Plantilla de configuración. |
 
