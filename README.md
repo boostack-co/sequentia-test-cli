@@ -156,6 +156,7 @@ El otro frente de integración de Sequentia: la REST que acepta API key. Entra p
 | `api index-status` | Cuánto de la KB está indexado. `--kb` |
 | `api gap-report` | Reporta que la KB no cubre algo. `--kb --q [--priority] --yes` |
 | `api feedback` | Califica una recuperación que un humano ya leyó. `--kb --rating --yes` |
+| `api doctor` | Perfila la credencial: qué scopes tiene, cuáles no, y dónde se consigue lo que falta. |
 
 ```bash
 node sq-test.mjs api health
@@ -210,6 +211,44 @@ Por eso son dos flags distintos: pasarle `--kb` a `api query` no se corrige en s
 Las cuatro se saltan pasando `--retrieval-id <id>` explícito: ahí quien lo escribe se hace cargo.
 
 **La clave de idempotencia se deriva del cuerpo entero** (`x-idempotency-key`, en `gap-report` y `feedback`). El requisito es que cubra exactamente lo mismo que el cuerpo, y derivarla de él lo cumple por construcción: reintentar lo mismo deduplica, y mandar algo distinto es otra observación. Una clave más estrecha devolvería 409 durante 24 h ante un cambio legítimo; una más ancha suprimiría observaciones que el contador del servidor cuenta.
+### `api doctor` — perfilar la credencial antes del 403
+
+Es lo que ni la colección ni un ejemplo dan por su cuenta: los dos te dejan ver que algo falla; ninguno dice **por qué**, y las causas que comparten status mandan a rotar keys que estaban bien.
+
+```bash
+node sq-test.mjs api doctor
+node sq-test.mjs api doctor --json | jq '.scopes'
+```
+
+Reporta el estado de cada scope en **tres** valores, y el tercero no es relleno:
+
+| | qué significa |
+| :--- | :--- |
+| `✔ confirmado` | una petición gratuita respondió 2xx |
+| `✘ ausente` | una petición gratuita respondió 403, y la deducción pudo nombrar cuál faltaba |
+| `· sin sondear` | **no se probó**, y el informe dice por qué |
+
+**Solo sondea lo que la colección declara sin escrituras y sin créditos**, y lo dice antes de empezar. Un diagnóstico que factura no es un diagnóstico. El conjunto sale de la metadata, no de una lista: un endpoint gratuito nuevo entra solo, y uno que cobra no se sondea nunca por descuido. El precio es que cinco de los `agent.*` quedan sin sondear, y el informe lo declara en vez de darlos por ausentes — decir que falta un permiso que quizá ya está manda a pedirlo de nuevo.
+
+**El `kbId` sale de la lista que la propia key devuelve.** Eso quita del medio la ambigüedad más cara del 403: contra una KB que la key acaba de enumerar, un 403 ya no puede ser «esa KB no está en tu lista blanca».
+
+**Deduce por resta cuando una petición pide dos scopes.** `GET /agent/index-status/:kbId` necesita `agent.index_status` **y** `kb.read`; si el segundo ya se confirmó por su cuenta, el informe nombra el primero en vez de acusar a los dos. Si no puede decidir, dice que hay dos candidatos — no elige.
+
+**Distingue las tres cosas que se confunden**, y que tienen remedios distintos:
+
+| | qué está pasando |
+| :--- | :--- |
+| `403` | falta un scope — la key y el plan están bien |
+| `402 MODULE_NOT_ENTITLED` | el plan no incluye el módulo agéntico: **pedir más scopes no lo arregla** |
+| `402` sin créditos | la key y los permisos están bien; lo que falta es saldo |
+| `402` workspace | suspendido o forzando SSO: la key es válida y lo cerrado es el workspace |
+| `401` | la key no fue aceptada, y entonces **no se puede afirmar nada de sus scopes** |
+
+Y dice **dónde se consigue lo que falta**: los tres formularios de creación de keys de Admin Studio **no son superconjunto entre sí**, así que ninguna key creada desde uno solo los abre todos. `gaps.read` y `kb.read_internal` no figuran en ninguno.
+
+> **Sobre `kb.read_internal`**, el informe avisa en vez de reforzar el error habitual: gobierna un puñado de peticiones y **no es una frontera de confidencialidad general**. Lo que acota lo que una key alcanza es su lista blanca de KBs más un filtro de audiencia que falla cerrado. Provisionar una key creyendo que negar ese scope oculta el contenido interno es el error que este comando existe para no cometer.
+
+Sale con `0` aunque falten scopes — **el informe es el resultado**, y una key incompleta no es un fallo del comando. Solo sale con `3` si la celda no responde, porque ahí no hubo diagnóstico.
 
 ### La colección Postman
 
@@ -310,6 +349,8 @@ La referencia pública de las herramientas muestra ejemplos de `tools/call` suel
 | `api-client.mjs` | `SequentiaApiClient` — el transporte REST: sin sesión, con la taxonomía de errores del carril API. También importable. |
 | `catalog.mjs` | Lee la colección y la convierte en el catálogo que el CLI ejecuta. Es donde se descarta el host y donde se lee qué escribe cada petición. |
 | `agent.mjs` | Los seis endpoints del carril agéntico por nombre: sus topes, la memoria del `retrievalId` y la clave de idempotencia. |
+| `doctor.mjs` | El diagnóstico de credencial: qué sondear, cómo clasificar cada fallo y la deducción de qué scope falta. |
+| `doctor-smoke.mjs` | Ejercita esa deducción con sondeos fabricados, sin red ni credencial. Corre en el CI. |
 | `collection/` | La colección Postman pública y su entorno, más cómo se usa y cómo se mantiene. |
 | `sq-test.mjs` | El CLI: flags, subcomandos, formato, exit codes. |
 | `.env.example` | Plantilla de configuración. |

@@ -61,6 +61,10 @@ jobs:
           set -e
           node sq-test.mjs --help > /dev/null
           echo "" | node sq-test.mjs > /dev/null || test $? -eq 2   # sin TTY: ayuda + 2
+          # La deducción de `api doctor` es pura, así que se ejercita sin
+          # credencial y sin red — incluida la rama que la colección de hoy no
+          # alcanza. Un motivo mal asignado no falla, solo miente.
+          node doctor-smoke.mjs
 
       - name: Casos que deben fallar (y con qué código)
         shell: bash
@@ -144,6 +148,13 @@ jobs:
           # Sin id recordado, `feedback` se niega: el campo es opcional en el
           # esquema, asi que un vacio escribiria una fila ligada a nada.
           esperar 2 node sq-test.mjs api feedback --kb X --rating helpful --yes "${celda[@]}"
+          # `api doctor` no toma opciones: lo que necesita sale de la config.
+          # Un flag aceptado y no usado es el fallo silencioso que este CLI
+          # rechaza en todas partes.
+          esperar 2 node sq-test.mjs api doctor --kb X            # no existe esa opcion
+          esperar 2 node sq-test.mjs api doctor --yes             # no escribe: nada que confirmar
+          esperar 2 node sq-test.mjs api doctor sobra             # posicional de mas
+          esperar 2 node sq-test.mjs api doctor                   # falta SQ_TEST_API_URL
 
       - name: init crea la config del usuario
         shell: bash
