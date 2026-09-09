@@ -65,6 +65,10 @@ jobs:
           # credencial y sin red — incluida la rama que la colección de hoy no
           # alcanza. Un motivo mal asignado no falla, solo miente.
           node doctor-smoke.mjs
+          # La coleccion es cara al cliente: si una descripcion miente sobre lo
+          # que una peticion escribe o cuesta, el dano es de quien la corre.
+          # Corre sin credenciales y sin red, como el resto del CI.
+          node collection-lint.mjs
 
       - name: Casos que deben fallar (y con qué código)
         shell: bash
@@ -155,6 +159,12 @@ jobs:
           esperar 2 node sq-test.mjs api doctor --yes             # no escribe: nada que confirmar
           esperar 2 node sq-test.mjs api doctor sobra             # posicional de mas
           esperar 2 node sq-test.mjs api doctor                   # falta SQ_TEST_API_URL
+          # `api collection` contrasta con lo publicado. Sin red no se puede
+          # contrastar, asi que lo que se ejercita aca es el parseo y la config.
+          esperar 2 node sq-test.mjs api collection                            # falta --check o --refresh
+          esperar 2 node sq-test.mjs api collection --checkk                   # flag mal escrito
+          esperar 2 node sq-test.mjs api collection --check sobra              # posicional de mas
+          esperar 2 node sq-test.mjs api collection --check                    # falta SQ_TEST_COLLECTION_URL
 
       - name: init crea la config del usuario
         shell: bash
