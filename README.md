@@ -79,7 +79,19 @@ El `.env` **no se commitea** — el `.gitignore` lo cubre. Nunca lo agregues a l
    q. Salir
 ```
 
-Dentro de `1. MCP` están las 12 herramientas más `tools`, numeradas `1.1`…`1.13`; desde la raíz se puede saltar directo escribiendo `1.4`. **Esos números son contrato público** —están acá y en los guiones de `menu-smoke.mjs`, que son literalmente secuencias de números—, así que una herramienta nueva se agrega **al final** y toma el `1.14`: nunca se reasigna ni se reordena un número ya publicado. El CI lo afirma. La knowledge base se elige de una lista: no hay que tipear UUIDs. **Esa lista se pide al servidor cada vez que se abre el selector**, así que una KB creada con el menú abierto aparece enseguida.
+La raíz tiene siete secciones:
+
+```
+   0. Configuración
+   1. MCP                     13 funcionalidades
+   2. API · lectura            3 acciones
+   3. API · carril agéntico    6 acciones
+   4. Agente                   2 acciones
+   5. Diagnóstico              1 acción
+   6. Colección                2 acciones
+```
+
+Dentro de `1. MCP` están las 12 herramientas más `tools`, numeradas `1.1`…`1.13`; desde la raíz se puede saltar directo escribiendo `1.4` — y lo mismo vale para cualquier sección, así que `3.4` entra directo al estado del índice. **El nombre del comando también sirve de atajo**: tipear `retrieve` o `doctor` desde la raíz hace lo mismo que su número, que es lo que deja crecer la lista sin volverla un muro. **Esos números son contrato público** —están acá y en los guiones de `menu-smoke.mjs`, que son literalmente secuencias de números—, así que se agregan **al final**: una herramienta nueva toma el `1.14`, un ítem nuevo va al final de su sección y una sección nueva al final de la raíz. Nunca se reasigna ni se reordena un número ya publicado. El CI afirma los 13 de MCP y los 14 del carril API, y se lo vio rechazar un ítem intercalado, una sección intercalada y dos secciones intercambiadas — mientras que agregar al final lo deja en verde, que es el único cambio que el diseño permite. La knowledge base se elige de una lista: no hay que tipear UUIDs. **Esa lista se pide al servidor cada vez que se abre el selector**, así que una KB creada con el menú abierto aparece enseguida.
 
 Cada acción se enmarca entre el comando y el tiempo:
 
