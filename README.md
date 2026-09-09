@@ -326,7 +326,9 @@ El tope se mide en **unidades UTF-16**, no en puntos de código: un par subrogad
 
 #### `--json` siempre escribe un documento
 
-Toda salida alcanzable emite un valor, y siempre del **mismo tipo**: un array. Una corrida que muere antes de anotar un paso emite `[]`. Cero bytes es indistinguible de un proceso que se murió, y quien parsea la salida no debería tener que escribir dos caminos según el desenlace.
+Toda salida alcanzable emite un valor, y siempre del **mismo tipo**: un array. Una corrida que muere antes de anotar un paso emite `[]` — falta `--kb`, falta `SQ_TEST_LLM_URL`, la pregunta llegó en blanco: todas escriben el documento y salen con `2`. Cero bytes es indistinguible de un proceso que se murió, y quien parsea la salida no debería tener que escribir dos caminos según el desenlace: para eso está el exit code.
+
+El límite está donde el bucle todavía no existe. Una **invocación** que el parseo rechaza —una opción desconocida, un posicional de más— falla antes de llegar al comando y reporta solo por stderr, igual que en cualquier otro comando del CLI: ahí no hay corrida de la que emitir traza. Un script que redirige `--json` a `jq` no se topa con eso salvo que tenga mal escrita la línea, que es un error suyo y no un desenlace del bucle.
 
 #### Modos y salida
 

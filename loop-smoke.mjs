@@ -1,14 +1,22 @@
 #!/usr/bin/env node
 /**
- * Ejercita la POLÍTICA y los CONTRATOS del bucle con respuestas fabricadas.
+ * Ejercita la POLÍTICA y los CONTRATOS del bucle con respuestas fabricadas, y
+ * la INVARIANTE DE SALIDA de `api loop`, que no es pura: es del proceso.
  *
- * Las dos son puras, así que se prueban sin credencial, sin modelo y sin red —
- * y corren en toda la matriz del CI. Es donde vale la pena gastar el esfuerzo:
- * un contrato mal escrito no falla, deja pasar; y una política mal escrita
- * manda una respuesta que nadie evaluó.
+ * Las dos primeras son puras, así que se prueban sin credencial, sin modelo y
+ * sin red. Es donde vale la pena gastar el esfuerzo: un contrato mal escrito no
+ * falla, deja pasar; y una política mal escrita manda una respuesta que nadie
+ * evaluó. La tercera necesita levantar el CLI de verdad —lo que se rompió fue
+ * el ORDEN de dos declaraciones, y ninguna función pura lo ve— pero tampoco
+ * toca la red: todos sus casos se rechazan antes de la primera llamada.
  *
  *   node loop-smoke.mjs
  */
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   DECLINACION,
   PREFIJO_CITA,
@@ -213,6 +221,79 @@ comprobar("un id con NUL se declina", () => valorSeguroParaComando(`ret${String.
 // `;` y `$(…)` SÍ son seguros: el citado los desarma. Declinarlos sería
 // rechazar de más, que es otro defecto.
 comprobar("`;` y `$()` no se declinan: el citado los desarma", () => valorSeguroParaComando("ret; $(whoami)").seguro, true);
+
+// ---------------------------------------------------------------------------
+// La invariante de salida: `--json` escribe un documento en TODOS los caminos.
+//
+// Toda salida alcanzable de `api loop` emite un valor, y siempre del mismo
+// tipo: un array. La corrida que muere antes de anotar un paso emite `[]`.
+// Cero bytes es indistinguible de un proceso que se murió, y quien parsea la
+// salida no debería escribir dos caminos según el desenlace — para eso está el
+// exit code.
+//
+// Lo que se rompió fue el ORDEN: la traza se declaraba junto a la primera
+// llamada, así que todo rechazo anterior —falta --kb, falta el modelo— salía
+// por el manejador global sin pasar nunca por el emisor. Por eso el guion
+// levanta el proceso en vez de llamar a una función: el defecto vivía entre
+// dos declaraciones, y ninguna función pura lo alcanza.
+//
+// Corre con HOME y cwd apuntando a un directorio vacío. Si el `.env` real del
+// desarrollador se colara, su SQ_TEST_LLM_URL haría que estos casos siguieran
+// de largo hasta la red y el guion estaría probando otra cosa — en verde.
+// ---------------------------------------------------------------------------
+const CLI = fileURLToPath(new URL("./sq-test.mjs", import.meta.url));
+const SANDBOX = mkdtempSync(join(tmpdir(), "sq-test-loop-smoke-"));
+const ENTORNO = { ...process.env, HOME: SANDBOX, USERPROFILE: SANDBOX };
+for (const clave of Object.keys(ENTORNO)) {
+  // Cualquier SQ_TEST_* heredado gana sobre el `.env` y cambiaría el desenlace.
+  if (clave.startsWith("SQ_TEST_")) delete ENTORNO[clave];
+}
+// Una celda que NO resuelve: ninguno de estos casos debería llegar a la red, y
+// si un día uno llega, que falle en DNS y no contra una celda de verdad.
+ENTORNO.SQ_TEST_API_URL = "https://celda.invalid";
+ENTORNO.SQ_TEST_TOKEN = "sk_live_delguion";
+
+function correrCli(args) {
+  const r = spawnSync(process.execPath, [CLI, ...args], { cwd: SANDBOX, env: ENTORNO, encoding: "utf8" });
+  return { codigo: r.status, salida: r.stdout ?? "", error: r.stderr ?? "" };
+}
+
+const KB = "8772076b-f6f1-4007-aa2e-6eeee8818808";
+const RECHAZOS_TEMPRANOS = [
+  ["falta el modelo", ["--kb", KB, "--json", "¿cómo restablezco una contraseña?"]],
+  ["falta --kb", ["--json", "¿cómo restablezco una contraseña?"]],
+  ["la pregunta llegó vacía", ["--kb", KB, "--json", ""]],
+  ["la pregunta no vino", ["--kb", KB, "--json"]],
+  ["--max-send-risk fuera de rango", ["--kb", KB, "--json", "--max-send-risk", "5", "q"]],
+  ["una opción que no se usaría", ["--kb", KB, "--json", "--no-generate", "--show-evidence", "q"]],
+];
+
+for (const [que, args] of RECHAZOS_TEMPRANOS) {
+  const r = correrCli(["api", "loop", ...args]);
+  comprobar(`${que}: la salida es JSON, y es un array`, () => Array.isArray(JSON.parse(r.salida)), true);
+  comprobar(`${que}: y va vacío — no llegó a anotar un paso`, () => JSON.parse(r.salida).length, 0);
+  comprobar(`${que}: sale 2, rechazada antes de empezar`, () => r.codigo, 2);
+}
+
+// El control en la dirección contraria, que es lo que hace que la guarda no sea
+// "emitir siempre": sin --json el documento NO aparece. Emitirlo igual
+// ensuciaría stdout de quien no lo pidió, y `api loop > decision.txt` guardaría
+// un `[]` en lugar de la decisión, que es el archivo que ese redirect existe
+// para dejar.
+comprobar(
+  "sin --json el documento no sale: rechazar de más es otro defecto",
+  () => correrCli(["api", "loop", "--kb", KB, "q"]).salida,
+  "",
+);
+// Y el error se sigue reportando por stderr con su motivo, no se lo come el
+// documento: emitir la traza no es "tragarse el fallo".
+comprobar(
+  "el motivo del rechazo sigue saliendo por stderr",
+  () => /SQ_TEST_LLM_URL/.test(correrCli(["api", "loop", "--kb", KB, "--json", "q"]).error),
+  true,
+);
+
+rmSync(SANDBOX, { recursive: true, force: true });
 
 console.log(fallos ? `\n${fallos} fallos` : "\nTodo en verde.");
 process.exit(fallos ? 1 : 0);
