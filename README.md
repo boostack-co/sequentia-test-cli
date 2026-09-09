@@ -293,6 +293,29 @@ La distinción **es** el diseño:
 
 Se declaran en el sitio de la llamada, no en un registro central: solo quien llama sabe qué campos lee, y nombrarlos ahí es lo que hace visible en un review qué necesita un endpoint nuevo.
 
+#### Cuatro negativas antes de verificar
+
+Hay respuestas que **no son verificables**, y mandarlas a `/verify` produce un veredicto que no habla de lo que el agente va a enviar. Ninguna de las cuatro archiva un hueco de conocimiento — **la KB no tiene la culpa de que el modelo invente una cita**:
+
+| | por qué no alcanza con verificar |
+| :--- | :--- |
+| **cita fuera de rango** — un `[7]` con dos fuentes | `/verify` **no lo puede cazar**: hace su propia recuperación y juzga la afirmación, así que puede devolver `supported` sobre evidencia que el lector nunca vio |
+| **ninguna cita**, y tampoco la declinación | una respuesta sin procedencia no se puede comprobar, y mandarla igual convierte al verificador en un sello de goma |
+| **subrogado suelto** | `JSON.parse` los acepta, así que cualquier respuesta puede traer uno; el encoder del cuerpo lo cambia por U+FFFD y `/verify` juzgaría una afirmación que el modelo nunca hizo |
+| **por encima de 4000 unidades UTF-16** | **no se trunca**: un veredicto sobre los primeros 4000 no cubre lo que el agente manda |
+
+El tope se mide en **unidades UTF-16**, no en puntos de código: un par subrogado son dos. Y se mide **exactamente lo que se envía** —el texto ya recortado con `String.prototype.trim`—, porque medir una cosa y mandar otra es la trampa: las definiciones de «espacio en blanco» no coinciden entre runtimes y la diferencia alcanza para dejar pasar algo que el servidor rechaza.
+
+#### Escapado: tres superficies que no se defienden con lo mismo
+
+- **Caracteres de control**, porque una terminal *actúa* sobre algunos. `ESC [ 2 K` borra la línea entera: metido en un fragmento de la KB, puede borrar la línea de escalado y dejar un `DECISION: MANDAR` falso en su lugar. Se escapan a su forma visible, no se quitan.
+- **La respuesta del modelo, como bloque citado con prefijo.** Una falsificación de la línea de decisión es **texto imprimible corriente**, así que escapar controles no la toca; lo único que la contiene es el prefijo, que le quita la columna donde esa línea significaría algo. Se suma a que el progreso va por stderr y la decisión por stdout: `grep '^DECISION'` sobre stdout devuelve una sola línea, la real.
+- **El comando copiable**, que tiene **dos requisitos en direcciones opuestas**: seguro de *ejecutar* (hay que citar, porque `;` y `$(…)` son texto imprimible) y seguro de *copiar* (un carácter de control sobrevive al citado y después hay que escaparlo, con lo que el comando pegado llevaría un id **distinto**). No hay orden de las dos operaciones que arregle ambas, así que un valor que no puede ser las dos cosas **se declina** y una línea dice cuál se rechazó. Un comando que no reproduce la acción es peor que ninguno.
+
+#### `--json` siempre escribe un documento
+
+Toda salida alcanzable emite un valor, y siempre del **mismo tipo**: un array. Una corrida que muere antes de anotar un paso emite `[]`. Cero bytes es indistinguible de un proceso que se murió, y quien parsea la salida no debería tener que escribir dos caminos según el desenlace.
+
 #### Modos y salida
 
 | | |
