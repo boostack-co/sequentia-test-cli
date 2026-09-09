@@ -34,6 +34,7 @@
     "mcp-client.mjs",
     "api-client.mjs",
     "catalog.mjs",
+    "agent.mjs",
     "collection/",
     "menu-smoke.mjs",
     "README.md"

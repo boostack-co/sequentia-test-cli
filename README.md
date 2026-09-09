@@ -143,13 +143,19 @@ La guarda va por **nombre de herramienta**, no por subcomando: `call verify_clai
 
 ## El carril API (`/api/v1`)
 
-El otro frente de integración de Sequentia: la REST que acepta API key. Entra por sesiones; hoy está el cliente y la primera petición.
+El otro frente de integración de Sequentia: la REST que acepta API key. Entra por sesiones; hoy están el cliente, el ejecutor genérico y los atajos del carril agéntico.
 
 | Comando | Qué hace |
 | :--- | :--- |
 | `api health` | Comprueba que la celda responde. **No usa credencial.** |
 | `api list` | Lista lo que declara la colección: scopes, qué escribe y qué cuesta. Tampoco usa credencial ni red. |
 | `api run '<nombre>'` | Corre cualquier petición de la colección. `[--var clave=valor] [--yes]` |
+| `api retrieve` | Recupera fragmentos con procedencia, sin generar nada. `--kb --q [--max-results 1-50] --yes` |
+| `api query` | El carril gestionado: Sequentia sintetiza. `--kbs a,b --q [--max-results 1-20] --yes` |
+| `api verify` | Juzga si una afirmación está fundamentada. `--kb --claim --yes` |
+| `api index-status` | Cuánto de la KB está indexado. `--kb` |
+| `api gap-report` | Reporta que la KB no cubre algo. `--kb --q [--priority] --yes` |
+| `api feedback` | Califica una recuperación que un humano ya leyó. `--kb --rating --yes` |
 
 ```bash
 node sq-test.mjs api health
@@ -172,9 +178,42 @@ Tres guardas corren **antes de cualquier red**:
 
 Se acepta **con y sin `/api/v1`**. No es una comodidad: cada ruta ya empieza con ese prefijo, así que pegar el base URL en la forma en que suele aparecer documentado daba `/api/v1/api/v1/…`, un 404 que se lee como un problema del despliegue y es de configuración.
 
+### Los atajos del carril agéntico
+
+`api run` ya puede correr estos seis endpoints. Los atajos existen por lo que el ejecutor genérico no puede dar: **convertir un 400 del servidor en un mensaje entendible sin salir a la red**, y encadenar `retrieve → feedback`.
+
+```bash
+node sq-test.mjs api retrieve --kb <slug> --q "¿cómo restablezco la contraseña?" --yes
+node sq-test.mjs api feedback --kb <slug> --rating helpful --yes   # usa el id recordado
+node sq-test.mjs api index-status --kb <slug>                      # ni escribe ni cuesta: no pide --yes
+```
+
+**Los contratos se parecen y no son iguales**, y equivocarse es un 400:
+
+| | knowledge bases | tope |
+| :--- | :--- | :--- |
+| `api query` | `--kbs a,b` — **array** de 1 a 10, sin repetidos | `--max-results` 1–**20** |
+| `api retrieve` | `--kb` — una sola | `--max-results` 1–**50** |
+| `api verify` | `--kb` — una sola | `--claim` ≤ 4000 caracteres |
+
+Por eso son dos flags distintos: pasarle `--kb` a `api query` no se corrige en silencio, se rechaza explicando que ese endpoint toma un array. Que la asimetría se vea en el comando es más barato que descubrirla en un 400.
+
+**El `retrievalId` se recuerda, y con fecha de vencimiento.** `api retrieve` lo guarda en `~/.config/sq-test/estado.json` (nunca el token) junto con **contra qué KB y contra qué celda** se capturó, para que `api feedback` no tenga que repetirlo. Se guarda **solo con una respuesta exitosa**: este carril también devuelve un `retrievalId` en los cuerpos de 402, 500 y 502, y atarle un feedback lo ligaría a una consulta que nunca produjo respuesta.
+
+`api feedback` se niega en cuatro casos, y los cuatro terminan en una fila escrita que nadie podría interpretar después:
+
+- **no hay ningún id recordado** — el campo es opcional en el esquema del servidor, así que un vacío se aceptaría y escribiría una fila ligada a nada, sesgando en silencio la analítica de utilidad;
+- **el id tiene más de diez minutos** — política de este CLI, no del servidor;
+- **se capturó contra otra KB** — el servidor escribiría la fila igual, y la calificación aterrizaría en un panel que esa recuperación nunca tocó;
+- **se capturó contra otra celda** — un id de otra celda no identifica nada acá.
+
+Las cuatro se saltan pasando `--retrieval-id <id>` explícito: ahí quien lo escribe se hace cargo.
+
+**La clave de idempotencia se deriva del cuerpo entero** (`x-idempotency-key`, en `gap-report` y `feedback`). El requisito es que cubra exactamente lo mismo que el cuerpo, y derivarla de él lo cumple por construcción: reintentar lo mismo deduplica, y mandar algo distinto es otra observación. Una clave más estrecha devolvería 409 durante 24 h ante un cambio legítimo; una más ancha suprimiría observaciones que el contador del servidor cuenta.
+
 ### La colección Postman
 
-En [`collection/`](collection/) vive la colección pública de la API, con su entorno. Es el mismo artefacto que un cliente importa para tocar la API en cinco minutos sin escribir código, y el que el CLI va a usar como **catálogo ejecutable**: un ejecutor genérico correrá cualquier petición que la colección declare.
+En [`collection/`](collection/) vive la colección pública de la API, con su entorno. Es el mismo artefacto que un cliente importa para tocar la API en cinco minutos sin escribir código, y el que el CLI usa como **catálogo ejecutable**: `api run` corre cualquier petición que la colección declare.
 
 Cada petición lleva en su descripción un bloque `sq-test` legible por máquina con sus scopes, qué persiste y si gasta créditos — que es lo que después alimenta la guarda de `--yes`. Ver [`collection/README.md`](collection/README.md) para usarla y [`collection/PUBLISHING.md`](collection/PUBLISHING.md) para mantenerla.
 
@@ -270,6 +309,7 @@ La referencia pública de las herramientas muestra ejemplos de `tools/call` suel
 | `mcp-client.mjs` | `SequentiaMcpClient` — transporte reusable (handshake, SSE, sesión, reintentos, errores). Importable desde otros scripts. |
 | `api-client.mjs` | `SequentiaApiClient` — el transporte REST: sin sesión, con la taxonomía de errores del carril API. También importable. |
 | `catalog.mjs` | Lee la colección y la convierte en el catálogo que el CLI ejecuta. Es donde se descarta el host y donde se lee qué escribe cada petición. |
+| `agent.mjs` | Los seis endpoints del carril agéntico por nombre: sus topes, la memoria del `retrievalId` y la clave de idempotencia. |
 | `collection/` | La colección Postman pública y su entorno, más cómo se usa y cómo se mantiene. |
 | `sq-test.mjs` | El CLI: flags, subcomandos, formato, exit codes. |
 | `.env.example` | Plantilla de configuración. |
