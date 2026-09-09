@@ -1,8 +1,8 @@
 {
   "name": "sequentia-test-cli",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "type": "module",
-  "description": "Test de Integraciones SEQUENTIA — menú y CLI para el servidor MCP.",
+  "description": "Test de Integraciones SEQUENTIA — menú y CLI para el servidor MCP y la API REST /api/v1, con el bucle agéntico de recuperar, verificar y decidir.",
   "license": "Apache-2.0",
   "author": "Boostack",
   "homepage": "https://github.com/boostack-co/sequentia-test-cli#readme",
@@ -18,7 +18,10 @@
     "mcp",
     "model-context-protocol",
     "rag",
+    "rag-verification",
+    "agentic",
     "knowledge-base",
+    "postman",
     "cli"
   ],
   "engines": {
@@ -43,7 +46,8 @@
     "loop.mjs",
     "loop-smoke.mjs",
     "menu-smoke.mjs",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "start": "node sq-test.mjs",
