@@ -114,6 +114,37 @@ jobs:
           esperar 2 node sq-test.mjs api list --raw                            # --raw no existe en REST
           esperar 2 node sq-test.mjs api list sobra                            # posicional de mas
 
+          # Atajos del carril agéntico. La guarda de --yes corre ANTES de
+          # resolver la config, así que estos fallan por la guarda y no por
+          # "falta SQ_TEST_API_URL" — que es justamente lo que tienen que decir.
+          esperar 2 node sq-test.mjs api retrieve --kb X --q Y                  # gasta creditos, falta --yes
+          esperar 2 node sq-test.mjs api verify --kb X --claim Y                # idem
+          esperar 2 node sq-test.mjs api gap-report --kb X --q Y --yes=false    # el booleano explicito no bypassea
+          esperar 2 node sq-test.mjs api feedback --kb X --rating helpful       # persiste, falta --yes
+          esperar 2 node sq-test.mjs api query --kb X --q Y --yes               # /query toma un array: es --kbs
+          esperar 2 node sq-test.mjs api retrieve --kb X --q Y --mximo 3 --yes  # flag desconocido, no se ignora
+          esperar 2 node sq-test.mjs api retrieve --kb X --q Y sobra --yes      # posicional de mas
+          # `index-status` no gasta ni escribe, asi que no acepta --yes: una
+          # opcion aceptada es una opcion usada.
+          esperar 2 node sq-test.mjs api index-status --kb X --yes
+
+          # Los topes. Estos SI necesitan una celda configurada, porque la
+          # validacion del cuerpo corre despues de resolver la config; sin
+          # --api-url pasarian por "falta SQ_TEST_API_URL" y no probarian el
+          # tope. La URL es .invalid y nada sale a la red: el cuerpo se arma
+          # antes de construir el cliente.
+          celda=(--api-url https://celda.invalid)
+          esperar 2 node sq-test.mjs api retrieve --kb X --q Y --max-results 60 --yes "${celda[@]}"   # /retrieve topa en 50
+          esperar 2 node sq-test.mjs api query --kbs X --q Y --max-results 30 --yes "${celda[@]}"     # /query topa en 20
+          esperar 2 node sq-test.mjs api query --kbs A,A --q Y --yes "${celda[@]}"                    # KBs repetidas
+          esperar 2 node sq-test.mjs api query --kbs '' --q Y --yes "${celda[@]}"                     # lista vacia
+          esperar 2 node sq-test.mjs api index-status "${celda[@]}"                                   # falta --kb
+          esperar 2 node sq-test.mjs api gap-report --kb X --q Y --priority urgente --yes "${celda[@]}"
+          esperar 2 node sq-test.mjs api feedback --kb X --rating quizas --yes "${celda[@]}"
+          # Sin id recordado, `feedback` se niega: el campo es opcional en el
+          # esquema, asi que un vacio escribiria una fila ligada a nada.
+          esperar 2 node sq-test.mjs api feedback --kb X --rating helpful --yes "${celda[@]}"
+
       - name: init crea la config del usuario
         shell: bash
         run: |

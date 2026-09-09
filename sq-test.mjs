@@ -17,6 +17,13 @@ import { stdin, stdout } from "node:process";
 import { SequentiaMcpClient, McpToolError, McpTransportError } from "./mcp-client.mjs";
 import { SequentiaApiClient, ApiTransportError } from "./api-client.mjs";
 import {
+  AGENT_COMMANDS,
+  RETRIEVAL_TTL_MS,
+  agentNecesitaConfirmacion,
+  claveIdempotencia,
+  recordarRetrieval,
+} from "./agent.mjs";
+import {
   CatalogError,
   VARIABLES_RESERVADAS,
   buscarPeticion,
@@ -36,6 +43,7 @@ import {
   TOKEN_KEY,
   USER_ENV_FILE,
   UsageError,
+  buildCommandLine,
   formatMs,
   invocationPrefix,
   loadDotenv,
@@ -214,9 +222,19 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  const width = Math.max(...Object.keys(COMMANDS).map((k) => k.length), "call <tool>".length, "tools".length);
+  // El ancho incluye los comandos del carril API: `api index-status` es más
+  // largo que cualquier comando MCP, y calcularlo sin ellos desalinea la ayuda.
+  const width = Math.max(
+    ...Object.keys(COMMANDS).map((k) => k.length),
+    ...[...Object.keys(API_SUBCOMMANDS), ...Object.keys(AGENT_COMMANDS)].map((k) => k.length + 4),
+    "call <tool>".length,
+    "tools".length,
+  );
   const rows = Object.entries(COMMANDS).map(([name, cmd]) => `  ${name.padEnd(width)}  ${cmd.help}`);
-  const apiRows = Object.entries(API_SUBCOMMANDS).map(([name, sub]) => `  ${`api ${name}`.padEnd(width)}  ${sub.help}`);
+  const apiRows = [
+    ...Object.entries(API_SUBCOMMANDS).map(([name, sub]) => `  ${`api ${name}`.padEnd(width)}  ${sub.help}`),
+    ...Object.entries(AGENT_COMMANDS).map(([name, sub]) => `  ${`api ${name}`.padEnd(width)}  ${sub.help}`),
+  ];
   // La ayuda usa el mismo prefijo que los comandos impresos: instalado dice
   // `sq-test`, desde el repo dice `node sq-test.mjs`.
   const cmd = invocationPrefix();
@@ -326,7 +344,7 @@ function parseVars(lista) {
  */
 async function comandoApi(flags, positional) {
   const cmd = invocationPrefix();
-  const disponibles = Object.keys(API_SUBCOMMANDS);
+  const disponibles = [...Object.keys(API_SUBCOMMANDS), ...Object.keys(AGENT_COMMANDS)];
   const sub = positional[1];
 
   if (!sub) {
@@ -334,13 +352,24 @@ async function comandoApi(flags, positional) {
   }
   // Object.hasOwn por lo mismo que en el catálogo MCP: `api hasOwnProperty` no
   // debe resolver a la función heredada del prototipo.
-  if (!Object.hasOwn(API_SUBCOMMANDS, sub)) {
+  const esAgente = Object.hasOwn(AGENT_COMMANDS, sub);
+  if (!esAgente && !Object.hasOwn(API_SUBCOMMANDS, sub)) {
     throw new UsageError(`Subcomando de api desconocido: "${sub}". Disponibles: ${disponibles.join(", ")}.`);
   }
-  const spec = API_SUBCOMMANDS[sub];
-  assertKnownFlags(flags, spec.opts, `api ${sub}`, API_FLAGS);
+  const spec = esAgente ? AGENT_COMMANDS[sub] : API_SUBCOMMANDS[sub];
+  // `--yes` solo se acepta donde puede hacer algo: en los comandos del carril
+  // que escriben o cuestan. Aceptarlo en `api verify` sin usarlo sería la misma
+  // opción-que-no-se-usa que el CLI rechaza en todas partes.
+  const opts = esAgente && agentNecesitaConfirmacion(spec) ? [...spec.opts, "yes"] : spec.opts;
+  // Antes del chequeo genérico: un flag que existe en OTRO comando del carril
+  // merece decir por qué no vale acá. Después, `assertKnownFlags` lo tomaría
+  // como desconocido y el motivo real no se vería nunca.
+  for (const [flag, motivo] of Object.entries(spec.rechaza ?? {})) {
+    if (flags[flag] !== undefined) throw new UsageError(motivo);
+  }
+  assertKnownFlags(flags, opts, `api ${sub}`, API_FLAGS);
   const forma = sub === "run" ? `${cmd} api run '<nombre>' [--var clave=valor]` : `${cmd} api ${sub}`;
-  assertPositionals(positional, spec.posicionales, `api ${sub}`, forma);
+  assertPositionals(positional, spec.posicionales ?? 2, `api ${sub}`, forma);
   if (sub === "run" && !positional[2]) {
     throw new UsageError(`Falta el nombre de la petición.\n  Forma esperada: ${forma}\n  Vela con:  ${cmd} api list`);
   }
@@ -365,6 +394,61 @@ async function comandoApi(flags, positional) {
     } else {
       printPretty(data);
       console.log(`\n${status} · ${formatMs(ms)} · ${apiUrl}`);
+    }
+    return EXIT_OK;
+  }
+
+  if (esAgente) {
+    // La guarda va primero y antes de cualquier config: `api gap-report` sin
+    // --yes tiene que decir eso, no "falta la URL de la celda".
+    if (agentNecesitaConfirmacion(spec) && !flags.yes) {
+      const que = [spec.persists && `persiste ${spec.persists}`, spec.spendsCredits && "gasta créditos de IA"]
+        .filter(Boolean)
+        .join(" y ");
+      throw new UsageError(`"api ${sub}" ${que}.\n  Volvé a correrlo con --yes si querés hacerlo de verdad.`);
+    }
+
+    const { apiUrl, token } = resolveApiConfig(flags);
+    // El cuerpo se arma DESPUÉS de conocer la celda porque `feedback` valida
+    // contra ella el retrievalId recordado: un id de otra celda no identifica
+    // nada acá.
+    const body = spec.build(flags, { celda: apiUrl });
+    const ruta = typeof spec.ruta === "function" ? spec.ruta(flags) : spec.ruta;
+
+    const cabeceras = {};
+    if (spec.idempotencia && body !== undefined) {
+      // Derivada del cuerpo entero: reintentar lo mismo deduplica, y mandar
+      // algo distinto es otra observación. Una clave más estrecha daría 409
+      // durante 24 h ante un cambio legítimo; una más ancha suprimiría
+      // observaciones que el contador del servidor cuenta.
+      cabeceras["x-idempotency-key"] = claveIdempotencia(spec.idempotencia, body);
+    }
+
+    if (onDebug) onDebug(`celda ${apiUrl} · ${spec.metodo} ${ruta}`);
+    const client = new SequentiaApiClient({ baseUrl: apiUrl, token, onDebug });
+
+    const t0 = performance.now();
+    const { status, data } = await client.request(spec.metodo, ruta, { body, headers: cabeceras });
+    const ms = performance.now() - t0;
+
+    // Llegar acá ya implica 2xx: `request` lanza ante cualquier otra cosa. Es
+    // lo que hace que nunca se recuerde un id venido de un 402, 500 o 502.
+    if (spec.captura === "retrievalId" && data?.retrievalId) {
+      recordarRetrieval({ id: data.retrievalId, kb: String(flags.kb), celda: apiUrl });
+    }
+
+    if (flags.json) {
+      console.log(JSON.stringify(data, null, 2));
+      console.error(`${status} · ${formatMs(ms)}`);
+    } else {
+      printPretty(data);
+      console.log(`\n${status} · ${formatMs(ms)} · ${spec.metodo} ${ruta}`);
+      if (spec.captura === "retrievalId" && data?.retrievalId) {
+        // El comando se arma con el mismo constructor que el resto: la KB entra
+        // citada, así que un slug con espacios o comillas sigue siendo pegable.
+        const califica = buildCommandLine("api feedback", { kb: flags.kb, rating: "helpful" }, { needsYes: true });
+        console.log(`retrievalId recordado por ${RETRIEVAL_TTL_MS / 60000} min. Para calificar:\n  ${califica}`);
+      }
     }
     return EXIT_OK;
   }
