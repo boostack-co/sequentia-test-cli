@@ -26,6 +26,11 @@ Agrega el **carril agéntico de la API REST** (`/api/v1`) junto al de MCP, que s
 - **El rechazo de la pregunta estaba partido en dos**: `""` moría en el chequeo pre-dispatch y `"   "` adentro del handler, con salidas distintas para dos formas del mismo error.
 - **`.env.example` había quedado desincronizado** de `plantillaEnv()`: le faltaban `SQ_TEST_COLLECTION_URL` y las tres `SQ_TEST_LLM_*`. Es el archivo que copia quien trabaja desde el repo, así que la divergencia se paga sola.
 
+### Corregido en la verificación contra celdas reales
+
+- **`System / Health (vector)` apuntaba a una ruta que no existe** y se quitó de la colección. `GET /api/v1/health/vector` devuelve `401` en las dos celdas probadas, **con credencial y sin ella** — igual que cualquier ruta inventada bajo `/api/v1/`, porque el middleware de auth corre antes del 404. O sea que el `401` era un artefacto de ruteo y no un problema de credencial, y la descripción publicada («Estado del almacenamiento vectorial… Tampoco lleva credencial») mandaba a quien la corriera a revisar exactamente el lado equivocado. `System / Health` sí anda y es la que hay que correr primero.
+- **`temperature: 0` dejaba afuera a los modelos de razonamiento.** El bucle lo pedía siempre y no había flag ni variable que lo pisara, así que `gpt-5.5` y la familia `o*` de OpenAI —que responden `400 Only the default (1) value is supported`— simplemente no se podían usar. Ahora se reintenta una vez sin el parámetro, y la traza anota `temperatura: null` para que quien audite sepa que esa corrida no es repetible.
+
 ### Notas para quien actualiza
 
 - **`SQ_TEST_API_URL` no es el endpoint MCP.** Suele ser otro host: es el origen **directo** de tu celda, sin barra final y sin `/api/v1`.

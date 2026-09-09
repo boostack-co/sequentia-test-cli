@@ -13,6 +13,7 @@
  *   node loop-smoke.mjs
  */
 import { spawnSync } from "node:child_process";
+import { createServer } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +30,8 @@ import {
   revisarAntesDeVerificar,
   sinCitas,
   valorSeguroParaComando,
+  generar,
+  rechazaTemperature,
   CONTRATO_RETRIEVE,
   CONTRATO_VERIFY,
   ContractError,
@@ -293,7 +296,108 @@ comprobar(
   true,
 );
 
+// ---------------------------------------------------------------------------
+// `temperature: 0` y los modelos que lo rechazan
+//
+// El bucle lo pide a propósito: decide sobre lo que el modelo escribió, y una
+// corrida que no se puede repetir no se puede auditar. Pero los modelos de
+// razonamiento lo rechazan con un 400 —la familia `o*` de OpenAI, y desde
+// `gpt-5.5` también la principal—, y no hay flag que pise el valor, así que
+// exigirlo dejaba afuera a lo más nuevo del proveedor más común.
+//
+// Se reintenta UNA vez sin el parámetro y el precio se anota. Lo que estas
+// afirmaciones fijan es que el reintento se dispare SOLO por temperature, que
+// ocurra exactamente una vez, y que la traza diga cuándo se pagó.
+// ---------------------------------------------------------------------------
+const TEMP_400 = '{"error":{"message":"Unsupported value: \'temperature\' does not support 0 with this model. Only the default (1) value is supported."}}';
+
+comprobar("un 400 que nombra temperature sí es ese caso", () => rechazaTemperature(400, TEMP_400), true);
+comprobar("y no importa la caja", () => rechazaTemperature(400, '{"message":"Temperature is not supported"}'), true);
+// Las dos condiciones, no una. Reintentar un 400 cualquiera sin `temperature`
+// gastaría una segunda llamada para volver a fallar igual, y taparía el error
+// real detrás de un síntoma inventado.
+comprobar("un 400 por otra cosa NO lo es", () => rechazaTemperature(400, '{"error":{"message":"model not found"}}'), false);
+comprobar("un 401 que nombra temperature tampoco: no es un 400", () => rechazaTemperature(401, TEMP_400), false);
+comprobar("un 200 no lo es", () => rechazaTemperature(200, TEMP_400), false);
+comprobar("un cuerpo que no es cadena no rompe", () => rechazaTemperature(400, null), false);
+
+/** Un `/chat/completions` de mentira. Devuelve las peticiones que recibió. */
+async function conModeloFalso(responder, fn) {
+  const recibidas = [];
+  const srv = createServer((req, res) => {
+    let cuerpo = "";
+    req.on("data", (c) => (cuerpo += c));
+    req.on("end", () => {
+      recibidas.push(JSON.parse(cuerpo));
+      const { status, texto } = responder(recibidas.length, recibidas.at(-1));
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(texto);
+    });
+  });
+  await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
+  try {
+    const salida = await fn(`http://127.0.0.1:${srv.address().port}/v1/chat/completions`);
+    return { salida, recibidas };
+  } finally {
+    // `close()` solo deja de aceptar conexiones NUEVAS; las que `fetch` dejó
+    // abiertas por keep-alive siguen vivas y mantendrían el loop ocupado.
+    srv.closeAllConnections?.();
+    await new Promise((ok) => srv.close(ok));
+  }
+}
+
+const OK_200 = JSON.stringify({ choices: [{ message: { content: "Respondo. [1]" } }] });
+const MSJ = [{ role: "user", content: "hola" }];
+
+// El camino normal: el modelo acepta temperature:0 y NO hay reintento.
+await (async () => {
+  const { salida, recibidas } = await conModeloFalso(
+    () => ({ status: 200, texto: OK_200 }),
+    (url) => generar({ url, model: "m", key: null }, MSJ),
+  );
+  comprobar("un modelo que acepta temperature:0 se llama UNA vez", recibidas.length, 1);
+  comprobar("y se le manda el parámetro", recibidas[0].temperature, 0);
+  comprobar("la traza registra que la corrida es repetible", salida.temperatura, 0);
+  comprobar("y devuelve el contenido", salida.contenido, "Respondo. [1]");
+})();
+
+// El camino nuevo: lo rechaza, se reintenta sin el parámetro, se anota.
+await (async () => {
+  const { salida, recibidas } = await conModeloFalso(
+    (n) => (n === 1 ? { status: 400, texto: TEMP_400 } : { status: 200, texto: OK_200 }),
+    (url) => generar({ url, model: "o-cualquiera", key: null }, MSJ),
+  );
+  comprobar("un modelo que lo rechaza se llama DOS veces, no más", recibidas.length, 2);
+  comprobar("la primera lleva temperature", recibidas[0].temperature, 0);
+  comprobar("la segunda NO lo lleva — no se manda en 1, se omite", "temperature" in recibidas[1], false);
+  comprobar("y la traza dice que el determinismo se perdió", salida.temperatura, null);
+  comprobar("la respuesta llega igual", salida.contenido, "Respondo. [1]");
+})();
+
+// El control en la otra dirección: un 400 por OTRA razón no se reintenta, y el
+// error sale con su cuerpo en vez de quedar tapado por una segunda llamada.
+await (async () => {
+  let mensaje = "";
+  const { recibidas } = await conModeloFalso(
+    () => ({ status: 400, texto: '{"error":{"message":"model not found"}}' }),
+    async (url) => {
+      try {
+        await generar({ url, model: "inventado", key: null }, MSJ);
+      } catch (err) {
+        mensaje = err.message;
+      }
+    },
+  );
+  comprobar("un 400 por otra cosa NO se reintenta", recibidas.length, 1);
+  comprobar("y el error conserva el motivo real", () => /model not found/.test(mensaje), true);
+})();
+
 rmSync(SANDBOX, { recursive: true, force: true });
 
 console.log(fallos ? `\n${fallos} fallos` : "\nTodo en verde.");
-process.exit(fallos ? 1 : 0);
+// `process.exitCode` y NO `process.exit()`: con un servidor http de por medio,
+// salir a la fuerza agarra un handle a medio cerrar y libuv aborta el proceso
+// (en Windows, `UV_HANDLE_CLOSING` en async.c — exit 127 con el informe entero
+// ya impreso en verde, que es la peor forma de romper un guion de pruebas).
+// Así el proceso termina cuando el loop se vacía, sin la carrera.
+process.exitCode = fallos ? 1 : 0;
