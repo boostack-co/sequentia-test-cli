@@ -79,7 +79,7 @@ El `.env` **no se commitea** — el `.gitignore` lo cubre. Nunca lo agregues a l
    q. Salir
 ```
 
-Dentro de `1. MCP` están las 12 herramientas más `tools`, numeradas `1.1`…`1.13`; desde la raíz se puede saltar directo escribiendo `1.4`. La knowledge base se elige de una lista: no hay que tipear UUIDs. **Esa lista se pide al servidor cada vez que se abre el selector**, así que una KB creada con el menú abierto aparece enseguida.
+Dentro de `1. MCP` están las 12 herramientas más `tools`, numeradas `1.1`…`1.13`; desde la raíz se puede saltar directo escribiendo `1.4`. **Esos números son contrato público** —están acá y en los guiones de `menu-smoke.mjs`, que son literalmente secuencias de números—, así que una herramienta nueva se agrega **al final** y toma el `1.14`: nunca se reasigna ni se reordena un número ya publicado. El CI lo afirma. La knowledge base se elige de una lista: no hay que tipear UUIDs. **Esa lista se pide al servidor cada vez que se abre el selector**, así que una KB creada con el menú abierto aparece enseguida.
 
 Cada acción se enmarca entre el comando y el tiempo:
 
