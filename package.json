@@ -33,6 +33,8 @@
     "commands.mjs",
     "mcp-client.mjs",
     "api-client.mjs",
+    "catalog.mjs",
+    "collection/",
     "menu-smoke.mjs",
     "README.md"
   ],

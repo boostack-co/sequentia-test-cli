@@ -100,6 +100,20 @@ jobs:
           esperar 2 node sq-test.mjs api health --api-url no-es-una-url   # URL ilegible = config, no transporte
           esperar 2 node sq-test.mjs api health                           # falta SQ_TEST_API_URL
 
+          # Ejecutor genérico. `api list` lee la colección empaquetada, así que
+          # corre sin credencial y sin red: es un caso POSITIVO en esta matriz.
+          node sq-test.mjs api list > /dev/null || { echo "::error::api list falló"; exit 1; }
+          echo "ok  0  node sq-test.mjs api list"
+          esperar 2 node sq-test.mjs api run                                   # falta el nombre
+          esperar 2 node sq-test.mjs api run 'no existe'                       # no está en la colección
+          esperar 2 node sq-test.mjs api run 'Analytics'                       # ambiguo: no elige por vos
+          esperar 2 node sq-test.mjs api run '1. Retrieve' --var kbId=x        # gasta creditos, falta --yes
+          esperar 2 node sq-test.mjs api run 'Get knowledge base'              # falta --var kbId
+          esperar 2 node sq-test.mjs api run 'Health' --var suelto             # --var mal formado
+          esperar 2 node sq-test.mjs api run 'Health' --var baseUrl=http://x   # variable reservada
+          esperar 2 node sq-test.mjs api list --raw                            # --raw no existe en REST
+          esperar 2 node sq-test.mjs api list sobra                            # posicional de mas
+
       - name: init crea la config del usuario
         shell: bash
         run: |
