@@ -158,6 +158,7 @@ El otro frente de integración de Sequentia: la REST que acepta API key. Entra p
 | `api feedback` | Califica una recuperación que un humano ya leyó. `--kb --rating --yes` |
 | `api doctor` | Perfila la credencial: qué scopes tiene, cuáles no, y dónde se consigue lo que falta. |
 | `api collection --check` | Contrasta la colección empaquetada con la publicada en Postman. `[--refresh]` |
+| `api loop` | El bucle: recuperar → generar con **tu** modelo → verificar → decidir. `--kb '<pregunta>'` |
 
 ```bash
 node sq-test.mjs api health
@@ -250,6 +251,60 @@ Y dice **dónde se consigue lo que falta**: los tres formularios de creación de
 > **Sobre `kb.read_internal`**, el informe avisa en vez de reforzar el error habitual: gobierna un puñado de peticiones y **no es una frontera de confidencialidad general**. Lo que acota lo que una key alcanza es su lista blanca de KBs más un filtro de audiencia que falla cerrado. Provisionar una key creyendo que negar ese scope oculta el contenido interno es el error que este comando existe para no cometer.
 
 Sale con `0` aunque falten scopes — **el informe es el resultado**, y una key incompleta no es un fallo del comando. Solo sale con `3` si la celda no responde, porque ahí no hubo diagnóstico.
+
+### `api loop` — el bucle gobernado
+
+**Recuperar → generar con tu modelo → verificar → decidir.** No es un tutorial del flujo, que es obvio: es el flujo con las decisiones difíciles tomadas, y lo que enseña es **dónde está la frontera de responsabilidad**. Sequentia recupera y verifica; el modelo y la decisión son tuyos.
+
+```bash
+export SQ_TEST_LLM_URL=http://localhost:11434/v1/chat/completions
+export SQ_TEST_LLM_MODEL=llama3.1
+
+node sq-test.mjs api loop --kb <slug> "¿cómo restablezco la contraseña?"
+node sq-test.mjs api loop --kb <slug> --no-generate "…"     # sin modelo, sin escribir
+node sq-test.mjs api loop --kb <slug> --json "…" | jq       # un solo valor JSON
+```
+
+El modelo es **tuyo**: este CLI no trae ninguno. El shape es el `/chat/completions` de OpenAI, que cubre vLLM, Ollama, LM Studio, OpenRouter y OpenAI directo tal cual. **Azure queda afuera a propósito** — necesita `endpoint`, `apiVersion` y `deployment`, y fingir que anda sería peor que decir que no está.
+
+**Sin framework de agentes**, y no por ascetismo: un framework resuelve selección no determinista de herramientas, y este bucle es lineal y fijo, así que no habría nada que orquestar. Lo caro de acá —los contratos, la política, la traza— ningún framework lo trae, y un framework lo esconde.
+
+#### Una sola cifra de política
+
+`--max-send-risk`, 0.5 por defecto. **Todo lo demás se deriva de la respuesta del servidor**: `supported` con riesgo bajo manda, `unsupported` escala, y `contradicted` escala **siempre** sin mirar el riesgo — que la KB contradiga lo que el modelo escribió no es incertidumbre, es un desacuerdo.
+
+Si la verificación no trae ni `riskScore` ni `confidence`, **escala y lo dice**. Asumir riesgo cero mandaría una respuesta que nadie evaluó.
+
+#### Un tipo no basta cuando de un número sale una decisión
+
+```
+riskScore: false  ->  Number(false) === 0  ->  riesgo mínimo  ->  MANDAR
+riskScore: -5     ->  -5 <= 0.5            ->                     MANDAR
+```
+
+Las dos pasan cualquier comprobación laxa y las dos mandan. Se cierra con un **predicado** —número real, finito, dentro del rango que el servidor promete— y no con un `typeof`.
+
+#### Contratos de respuesta: `requires` contra `accepts`
+
+La distinción **es** el diseño:
+
+- **`requires`** — el campo cuya **ausencia hace que el default del llamante engañe**. Sin `chunks`, la recuperación se lee como vacía, o sea la rama de sin-evidencia — y esa rama archiva un hueco durable culpando a un curador por una pregunta que la KB quizá cubre. **La ausencia es el defecto.**
+- **`accepts`** — el campo cuyo default es inocuo pero cuyo **tipo equivocado revienta**, y revienta *después* de haber anotado el paso como exitoso. **Solo el tipo es el defecto.**
+
+Se declaran en el sitio de la llamada, no en un registro central: solo quien llama sabe qué campos lee, y nombrarlos ahí es lo que hace visible en un review qué necesita un endpoint nuevo.
+
+#### Modos y salida
+
+| | |
+| :--- | :--- |
+| `--no-generate` | para tras recuperar: mirar scopes y procedencia sin modelo y **sin escribir nada** |
+| `--managed` | contrasta con `/agent/query`. **Se niega** por encima de 20 en vez de recortar: los dos carriles tienen topes distintos y recortar en silencio compararía dos cosas diferentes |
+| `--show-evidence` | muestra la evidencia de verificación, **oculta por defecto** porque `/verify` recupera a visibilidad interna sea cual sea el alcance de la key |
+| `--json` | la traza, que es un **array** en todos los caminos — quien la parsea no debería escribir dos formas según el desenlace |
+
+El progreso va a stderr y la decisión a stdout, así que `api loop … > decision.txt` guarda la decisión y no los pasos.
+
+**Exit codes:** `0` mandar · `1` escalar, o una llamada que no se sostuvo · `2` rechazada antes de empezar. Ese `2` es literal: la config del modelo se comprueba **antes** de la primera llamada, porque `/agent/retrieve` gasta créditos y una corrida que no puede terminar no debería gastarlos primero.
 
 ### La colección Postman
 
@@ -369,6 +424,8 @@ La referencia pública de las herramientas muestra ejemplos de `tools/call` suel
 | `doctor-smoke.mjs` | Ejercita esa deducción con sondeos fabricados, sin red ni credencial. Corre en el CI. |
 | `collection-sync.mjs` | Trae la colección publicada y la contrasta con la empaquetada. |
 | `collection-lint.mjs` | Las guardas sobre la colección: variables, defaults inalcanzables, y que la prosa no contradiga la metadata. |
+| `loop.mjs` | El bucle: los contratos de respuesta, la política de riesgo y la traza. |
+| `loop-smoke.mjs` | Ejercita esa política y esos contratos con respuestas fabricadas, sin red ni modelo. Corre en el CI. |
 | `collection/` | La colección Postman pública y su entorno, más cómo se usa y cómo se mantiene. |
 | `sq-test.mjs` | El CLI: flags, subcomandos, formato, exit codes. |
 | `.env.example` | Plantilla de configuración. |

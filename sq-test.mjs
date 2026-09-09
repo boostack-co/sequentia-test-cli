@@ -19,8 +19,19 @@ import { SequentiaApiClient, ApiTransportError } from "./api-client.mjs";
 import { diagnosticar, formatearInforme } from "./doctor.mjs";
 import { CACHE_FILE, SyncError, catalogoDe, comparar, formatearDerivas, guardarCache, traerPublicada } from "./collection-sync.mjs";
 import {
+  MANAGED_MAX_RESULTS,
+  MAX_SEND_RISK,
+  resolveLlmConfig,
+  ContractError,
+  LlmError,
+  correrBucle,
+  decisionDe,
+  narrar,
+} from "./loop.mjs";
+import {
   AGENT_COMMANDS,
   RETRIEVAL_TTL_MS,
+  RETRIEVE_MAX_RESULTS,
   agentNecesitaConfirmacion,
   claveIdempotencia,
   recordarRetrieval,
@@ -49,6 +60,7 @@ import {
   UsageError,
   buildCommandLine,
   formatMs,
+  intInRange,
   invocationPrefix,
   loadDotenv,
   plantillaEnv,
@@ -56,6 +68,7 @@ import {
   printTable,
   resolveApiConfig,
   resolveConfig,
+  required,
   resolveKbId,
 } from "./commands.mjs";
 
@@ -67,7 +80,7 @@ const EXIT_TRANSPORT = 3;
 // ---------------------------------------------------------------------------
 // Parser de argumentos
 // ---------------------------------------------------------------------------
-const BOOLEAN_FLAGS = new Set(["json", "raw", "verbose", "yes", "help", "check", "refresh"]);
+const BOOLEAN_FLAGS = new Set(["json", "raw", "verbose", "yes", "help", "check", "refresh", "no-generate", "managed", "show-evidence"]);
 
 /**
  * Alias cortos. Son booleanos: nunca pueden ser el valor de otra opción.
@@ -132,6 +145,12 @@ const API_SUBCOMMANDS = {
     help: "Contrasta la colección empaquetada con la publicada:  api collection --check [--refresh]",
     opts: ["check", "refresh"],
     posicionales: 2,
+  },
+  loop: {
+    help: "El bucle: recuperar -> generar con TU modelo -> verificar -> decidir.  --kb \'<pregunta>\'",
+    opts: ["kb", "max-results", "max-send-risk", "no-generate", "managed", "show-evidence", "llm-url", "llm-key", "llm-model"],
+    // `api loop '<pregunta>'` son tres: comando, subcomando y pregunta.
+    posicionales: 3,
   },
   run: {
     help: "Corre cualquier petición de la colección:  api run \'<nombre>\' [--var k=v]",
@@ -382,8 +401,15 @@ async function comandoApi(flags, positional) {
     if (flags[flag] !== undefined) throw new UsageError(motivo);
   }
   assertKnownFlags(flags, opts, `api ${sub}`, API_FLAGS);
-  const forma = sub === "run" ? `${cmd} api run '<nombre>' [--var clave=valor]` : `${cmd} api ${sub}`;
+  const FORMAS = {
+    run: `${cmd} api run '<nombre>' [--var clave=valor]`,
+    loop: `${cmd} api loop --kb <slug> '<pregunta>'`,
+  };
+  const forma = FORMAS[sub] ?? `${cmd} api ${sub}`;
   assertPositionals(positional, spec.posicionales ?? 2, `api ${sub}`, forma);
+  if (sub === "loop" && !positional[2]) {
+    throw new UsageError(`Falta la pregunta.\n  Forma esperada: ${cmd} api loop --kb <slug> '<pregunta>'`);
+  }
   if (sub === "run" && !positional[2]) {
     throw new UsageError(`Falta el nombre de la petición.\n  Forma esperada: ${forma}\n  Vela con:  ${cmd} api list`);
   }
@@ -540,6 +566,104 @@ async function comandoApi(flags, positional) {
     // poder romper un CI, así que sale con 1 — el mismo código que usa el CLI
     // para "la operación se hizo y el resultado es negativo".
     return derivas.length ? EXIT_TOOL_ERROR : EXIT_OK;
+  }
+
+  if (sub === "loop") {
+    const pregunta = positional[2];
+    if (!String(pregunta).trim()) {
+      throw new UsageError("La pregunta no puede estar en blanco: no hay nada que recuperar.");
+    }
+    const kb = required(flags, "kb", "la knowledge base");
+
+    // El umbral es la ÚNICA cifra de política del bucle. Todo lo demás sale de
+    // lo que contesta el servidor.
+    let umbral = MAX_SEND_RISK;
+    if (flags["max-send-risk"] !== undefined) {
+      const n = Number(flags["max-send-risk"]);
+      if (!Number.isFinite(n) || n < 0 || n > 1) {
+        throw new UsageError(`--max-send-risk es un riesgo, así que va entre 0 y 1 (recibí "${flags["max-send-risk"]}")`);
+      }
+      umbral = n;
+    }
+
+    // Los dos carriles tienen topes distintos: /retrieve topa en 50 y /query en
+    // 20. Con --managed se corren los dos con el MISMO número, así que un valor
+    // que uno acepta y el otro no se RECHAZA en vez de recortarse — recortar en
+    // silencio compararía dos cosas distintas y llamaría a eso un contraste.
+    let maxResults;
+    if (flags["max-results"] !== undefined) {
+      const tope = flags.managed ? MANAGED_MAX_RESULTS : RETRIEVE_MAX_RESULTS;
+      maxResults = intInRange(flags, "max-results", 1, tope);
+      if (flags.managed && maxResults > MANAGED_MAX_RESULTS) {
+        throw new UsageError(`--managed contrasta contra /agent/query, que topa en ${MANAGED_MAX_RESULTS}.`);
+      }
+    }
+
+    // `--no-generate` para tras recuperar, así que ni verifica ni contrasta:
+    // aceptar opciones que gobiernan esos pasos y no usarlas es el fallo
+    // silencioso que este CLI rechaza en todas partes (invariante 3).
+    if (flags["no-generate"]) {
+      for (const opt of ["show-evidence", "managed"]) {
+        if (flags[opt]) {
+          throw new UsageError(
+            `--${opt} no hace nada con --no-generate: el bucle para tras recuperar,\n` +
+              "  así que no hay verificación que mostrar ni carril gestionado que contrastar.",
+          );
+        }
+      }
+    }
+
+    const { apiUrl, token } = resolveApiConfig(flags);
+    // El modelo se resuelve ANTES de la primera llamada. `/agent/retrieve`
+    // gasta créditos, y una corrida que no puede terminar por falta de config
+    // no debería gastarlos primero para después decir que falta una variable.
+    // Es lo que hace que el 2 signifique de verdad "rechazada antes de empezar".
+    const llm = flags["no-generate"] ? null : resolveLlmConfig(flags);
+    const client = new SequentiaApiClient({ baseUrl: apiUrl, token, onDebug });
+
+    // La narración va a stderr siempre: bajo --json el único valor de stdout es
+    // la traza, y sin --json el informe se lee igual con el progreso al lado.
+    const mostrarEvidencia = Boolean(flags["show-evidence"]);
+    if (!mostrarEvidencia && !flags["no-generate"]) {
+      // `/verify` recupera a visibilidad INTERNA sea cual sea el alcance de la
+      // key, así que su evidencia se oculta salvo que la pidan. Solo se avisa
+      // cuando de verdad va a haber una verificación.
+      console.error("(la evidencia de verificación va oculta: /verify recupera a visibilidad interna — --show-evidence para verla)");
+    }
+
+    const traza = await correrBucle({
+      client,
+      pregunta,
+      kb,
+      opciones: {
+        umbral,
+        maxResults,
+        generarRespuesta: !flags["no-generate"],
+        llm,
+        gestionado: Boolean(flags.managed),
+        flags,
+        onDebug,
+      },
+      // Los pasos son PROGRESO y van a stderr. La decisión no: es el
+      // resultado, y con `api loop > decision.txt` tiene que ser lo que queda
+      // en el archivo — narrarla por stderr dejaría el archivo vacío.
+      onPaso: (paso) => {
+        if (paso.paso !== "decidir") console.error(narrar(paso, { mostrarEvidencia }));
+      },
+    });
+
+    // La traza es un ARRAY, y lo es en todos los caminos: quien la parsea no
+    // debería escribir dos formas según el desenlace.
+    if (flags.json) {
+      console.log(JSON.stringify(traza, null, 2));
+    } else {
+      const fin = traza.findLast((p) => p.paso === "decidir");
+      if (fin) console.log(narrar(fin, { mostrarEvidencia }).trimStart());
+    }
+
+    // 0 mandar · 1 escalar. Un `--no-generate` no decide nada, y sale 0 porque
+    // hizo lo que se le pidió: el desenlace está en la traza, no en el código.
+    return decisionDe(traza) === "escalar" ? EXIT_TOOL_ERROR : EXIT_OK;
   }
 
   if (sub === "list") {
@@ -789,6 +913,12 @@ try {
     // depurar el transporte hace falta sobre todo cuando algo falla.
     if (parsedFlags.raw && err.envelope) console.log(JSON.stringify(err.envelope, null, 2));
     console.error(`La herramienta ${err.tool} devolvió un error:\n  ${err.message}`);
+    process.exitCode = EXIT_TOOL_ERROR;
+  } else if (err instanceof ContractError || err instanceof LlmError) {
+    // Sale con 1, no con 3: la llamada llegó y contestó 2xx — lo que no se
+    // sostuvo fue el cuerpo. No es transporte ni auth, es "la operación se
+    // hizo y el resultado es negativo", que en este CLI es 1.
+    console.error(`Error: ${err.message}`);
     process.exitCode = EXIT_TOOL_ERROR;
   } else if (err instanceof McpTransportError || err instanceof ApiTransportError || err instanceof SyncError) {
     console.error(`Error de transporte: ${err.message}`);

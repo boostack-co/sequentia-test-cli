@@ -69,6 +69,10 @@ jobs:
           # que una peticion escribe o cuesta, el dano es de quien la corre.
           # Corre sin credenciales y sin red, como el resto del CI.
           node collection-lint.mjs
+          # La politica y los contratos del bucle son puros: se ejercitan sin
+          # credencial, sin modelo y sin red. Un contrato mal escrito no falla,
+          # deja pasar; una politica mal escrita manda algo que nadie evaluo.
+          node loop-smoke.mjs
 
       - name: Casos que deben fallar (y con qué código)
         shell: bash
@@ -165,6 +169,27 @@ jobs:
           esperar 2 node sq-test.mjs api collection --checkk                   # flag mal escrito
           esperar 2 node sq-test.mjs api collection --check sobra              # posicional de mas
           esperar 2 node sq-test.mjs api collection --check                    # falta SQ_TEST_COLLECTION_URL
+
+          # El bucle. Todos fallan en el parseo o en la config: ninguno sale a
+          # la red, y el que necesita celda la recibe inalcanzable.
+          esperar 2 node sq-test.mjs api loop --kb X                            # falta la pregunta
+          esperar 2 node sq-test.mjs api loop ''                                # pregunta en blanco
+          esperar 2 node sq-test.mjs api loop pregunta                          # falta --kb
+          esperar 2 node sq-test.mjs api loop --kb X pregunta sobra             # posicional de mas
+          esperar 2 node sq-test.mjs api loop --kb X --modo raro pregunta       # flag desconocido
+          esperar 2 node sq-test.mjs api loop --kb X --max-send-risk 5 pregunta "${celda[@]}"      # fuera de 0-1
+          esperar 2 node sq-test.mjs api loop --kb X --max-send-risk -1 pregunta "${celda[@]}"     # idem
+          esperar 2 node sq-test.mjs api loop --kb X --max-send-risk abc pregunta "${celda[@]}"    # no es numero
+          # /query topa en 20 y /retrieve en 50: con --managed se corren los dos
+          # con el MISMO numero, asi que se NIEGA en vez de recortar en silencio.
+          esperar 2 node sq-test.mjs api loop --kb X --managed --max-results 30 pregunta "${celda[@]}"
+          # Y las opciones que no harian nada con --no-generate se rechazan.
+          esperar 2 node sq-test.mjs api loop --kb X --no-generate --show-evidence pregunta "${celda[@]}"
+          esperar 2 node sq-test.mjs api loop --kb X --no-generate --managed pregunta "${celda[@]}"
+          # Sin SQ_TEST_LLM_URL se rechaza ANTES de la primera llamada:
+          # /agent/retrieve gasta creditos, y una corrida que no puede terminar
+          # no deberia gastarlos primero.
+          esperar 2 node sq-test.mjs api loop --kb X pregunta "${celda[@]}"
 
       - name: init crea la config del usuario
         shell: bash

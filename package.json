@@ -40,6 +40,8 @@
     "collection-lint.mjs",
     "collection/",
     "doctor-smoke.mjs",
+    "loop.mjs",
+    "loop-smoke.mjs",
     "menu-smoke.mjs",
     "README.md"
   ],
