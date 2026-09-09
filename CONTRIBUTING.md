@@ -60,12 +60,17 @@ Estas son las promesas del proyecto. Si un cambio las toca, tiene que decirlo ex
 
 ## Pull requests
 
-1. Forkeá el repo y creá una rama desde `main`.
-2. Abrí el PR **contra `main`** — es la rama por defecto, así que tu fork ya apunta ahí.
+El flujo es **`tu-rama` → `dev` → `main`**, y `dev` no es opcional:
+
+1. Forkeá el repo y creá una rama desde **`dev`**.
+2. Abrí el PR **contra `dev`**. Ojo: `main` es la rama por defecto de GitHub, así que tu fork apunta ahí y el formulario de PR la propone sola — **hay que cambiarla a mano**.
 3. El CI corre solo. No necesita credenciales: valida sintaxis, y que los casos negativos devuelvan el exit code correcto usando una API key falsa.
 4. Un maintainer revisa y aprueba. `main` y `dev` no aceptan pushes directos.
+5. La promoción **`dev` → `main`** es su propio PR, y la hace un maintainer cuando lo integrado está listo para publicarse.
 
-`dev` es la rama de integración del equipo; no hace falta que la uses.
+**Por qué `dev` y no directo a `main`:** `main` es lo que se publica en npm. Integrar en `dev` deja que varias ramas convivan y se prueben juntas antes de que eso pase, que es justamente lo que un PR contra `main` se saltea.
+
+> Este archivo decía antes «abrí el PR contra `main`» y «`dev` … no hace falta que la uses». Estaba mal, y no fue inocuo: la épica del carril agéntico fusionó seis PRs directo a `main` siguiendo esta misma página.
 
 Sobre el PR en sí:
 

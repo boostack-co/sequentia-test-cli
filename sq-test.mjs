@@ -21,6 +21,7 @@ import { CACHE_FILE, SyncError, catalogoDe, comparar, formatearDerivas, guardarC
 import {
   MANAGED_MAX_RESULTS,
   MAX_SEND_RISK,
+  valorSeguroParaComando,
   resolveLlmConfig,
   ContractError,
   LlmError,
@@ -375,6 +376,36 @@ function parseVars(lista) {
  * esto en el flujo de arriba obligaría a abrir una sesión MCP —gastando uno de
  * los cinco cupos de la credencial— para una petición que no la usa.
  */
+/**
+ * El comando copiable para calificar la corrida despues.
+ *
+ * Es la tercera superficie de escapado, y la unica con **dos requisitos en
+ * direcciones opuestas**: seguro de EJECUTAR (hay que citar) y seguro de
+ * COPIAR (un caracter de control sobrevive al citado y luego hay que
+ * escaparlo, con lo que el comando pegado llevaria un id distinto del real).
+ *
+ * No hay orden de las dos operaciones que arregle las dos cosas, asi que un
+ * valor que no puede ser ambas se DECLINA: se dice cual se rechazo y por que.
+ * Un comando que no reproduce la accion es peor que no imprimir ninguno.
+ */
+function comandoParaCalificar(retrievalId, kb) {
+  const id = valorSeguroParaComando(retrievalId);
+  const slug = valorSeguroParaComando(kb);
+  const malo = !id.seguro ? ["retrievalId", id.motivo] : !slug.seguro ? ["kb", slug.motivo] : null;
+  if (malo) {
+    return (
+      `\nNo imprimo el comando para calificar: el ${malo[0]} ${malo[1]}.\n` +
+      "  Un comando que no reproduce la accion es peor que ninguno."
+    );
+  }
+  const linea = buildCommandLine(
+    "api feedback",
+    { kb: slug.valor, rating: "helpful", "retrieval-id": id.valor },
+    { needsYes: true },
+  );
+  return `\nPara calificar esta corrida:\n  ${linea}`;
+}
+
 async function comandoApi(flags, positional) {
   const cmd = invocationPrefix();
   const disponibles = [...Object.keys(API_SUBCOMMANDS), ...Object.keys(AGENT_COMMANDS)];
@@ -631,8 +662,18 @@ async function comandoApi(flags, positional) {
       console.error("(la evidencia de verificación va oculta: /verify recupera a visibilidad interna — --show-evidence para verla)");
     }
 
-    const traza = await correrBucle({
+    // La traza se crea ACA y se le pasa al bucle. Bajo `--json`, una corrida que
+    // muere a mitad de camino tiene que emitir igual lo anotado hasta ahí: cero
+    // bytes es indistinguible de un proceso que se murió, y quien parsea la
+    // salida no debería tener que distinguirlos.
+    const traza = [];
+    const emitirJson = () => {
+      if (flags.json) console.log(JSON.stringify(traza, null, 2));
+    };
+    try {
+      await correrBucle({
       client,
+      traza,
       pregunta,
       kb,
       opciones: {
@@ -648,17 +689,27 @@ async function comandoApi(flags, positional) {
       // resultado, y con `api loop > decision.txt` tiene que ser lo que queda
       // en el archivo — narrarla por stderr dejaría el archivo vacío.
       onPaso: (paso) => {
-        if (paso.paso !== "decidir") console.error(narrar(paso, { mostrarEvidencia }));
+        if (paso.paso !== "decidir") console.error(narrar(paso, { mostrarEvidencia, mostrarRespuesta: true }));
       },
-    });
+      });
+    } catch (err) {
+      // El documento sale IGUAL, y después se relanza: el error lo sigue
+      // reportando el manejador de arriba, con su exit code.
+      emitirJson();
+      throw err;
+    }
 
-    // La traza es un ARRAY, y lo es en todos los caminos: quien la parsea no
-    // debería escribir dos formas según el desenlace.
-    if (flags.json) {
-      console.log(JSON.stringify(traza, null, 2));
-    } else {
+    // La traza es un ARRAY en todos los caminos —incluido el que muere temprano,
+    // que emite `[]`—: quien la parsea no debería escribir dos formas según el
+    // desenlace, y el tipo no puede cambiar con él.
+    emitirJson();
+    if (!flags.json) {
       const fin = traza.findLast((p) => p.paso === "decidir");
       if (fin) console.log(narrar(fin, { mostrarEvidencia }).trimStart());
+      // El comando para calificar la corrida más tarde, si hay un id que lo
+      // permita. Va después de la decisión porque es lo que se hace con ella.
+      const rec = traza.find((p) => p.paso === "recuperar");
+      if (rec?.retrievalId) console.log(comandoParaCalificar(rec.retrievalId, kb));
     }
 
     // 0 mandar · 1 escalar. Un `--no-generate` no decide nada, y sale 0 porque
