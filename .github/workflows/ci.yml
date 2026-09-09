@@ -81,6 +81,28 @@ jobs:
               console.log(`OK: los ${esperado.length} numeros del menu MCP siguen donde estaban.`);
             });
           '
+          # Y los del carril API, por lo mismo. Append-only: un item nuevo va al
+          # final de su seccion y una seccion nueva al final de la raiz, asi que
+          # agregar NO mueve nada de esta lista; cualquier otra cosa la rompe.
+          node -e '
+            const esperado = {
+              "2.1": "health", "2.2": "list", "2.3": "run",
+              "3.1": "retrieve", "3.2": "query", "3.3": "verify",
+              "3.4": "index-status", "3.5": "gap-report", "3.6": "feedback",
+              "4.1": "loop", "4.2": "loop-no-generate",
+              "5.1": "doctor",
+              "6.1": "collection-check", "6.2": "collection-refresh",
+            };
+            import("./menu.mjs").then(({ NUMEROS_API }) => {
+              for (const [num, alias] of Object.entries(esperado)) {
+                if (NUMEROS_API[num] !== alias) {
+                  console.error(`::error::${num} deberia ser "${alias}" y es "${NUMEROS_API[num]}"`);
+                  process.exit(1);
+                }
+              }
+              console.log(`OK: los ${Object.keys(esperado).length} numeros del carril API siguen donde estaban.`);
+            });
+          '
           # La deducción de `api doctor` es pura, así que se ejercita sin
           # credencial y sin red — incluida la rama que la colección de hoy no
           # alcanza. Un motivo mal asignado no falla, solo miente.
@@ -89,6 +111,11 @@ jobs:
           # que una peticion escribe o cuesta, el dano es de quien la corre.
           # Corre sin credenciales y sin red, como el resto del CI.
           node collection-lint.mjs
+          # El menu, guionado. `2.2` (api list) lee la coleccion empaquetada, asi
+          # que corre sin credencial de API y sin red — igual que `api list`.
+          SQ_TEST_TOKEN=clave-de-prueba-del-ci node menu-smoke.mjs 2 2 "" b q > /dev/null
+          SQ_TEST_TOKEN=clave-de-prueba-del-ci node menu-smoke.mjs list "" q > /dev/null   # regla 3: el alias
+          SQ_TEST_TOKEN=clave-de-prueba-del-ci node menu-smoke.mjs 2.2 "" q > /dev/null    # regla 4: el salto
           # La politica y los contratos del bucle son puros: se ejercitan sin
           # credencial, sin modelo y sin red. Un contrato mal escrito no falla,
           # deja pasar; una politica mal escrita manda algo que nadie evaluo.
