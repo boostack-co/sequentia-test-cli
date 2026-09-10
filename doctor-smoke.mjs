@@ -15,7 +15,18 @@
  *
  *   node doctor-smoke.mjs
  */
-import { AUSENTE, CONFIRMADO, SIN_SONDEAR, PROCEDENCIA, alternativasDe, comoConseguir, estadoDeScopes } from "./doctor.mjs";
+import { ApiTransportError } from "./api-client.mjs";
+import {
+  AUSENTE,
+  CONFIRMADO,
+  SIN_SONDEAR,
+  PROCEDENCIA,
+  alternativasDe,
+  clasificar,
+  formatearInforme,
+  comoConseguir,
+  estadoDeScopes,
+} from "./doctor.mjs";
 import { cargarCatalogo } from "./catalog.mjs";
 
 const { entradas } = cargarCatalogo();
@@ -170,6 +181,79 @@ function comprobar(titulo, real, esperado) {
   );
   // Llamarla sin contexto tiene que seguir andando: es la firma que ya existía.
   comprobar("sin contexto sigue devolviendo una vía", Boolean(comoConseguir("agent.retrieve")), true);
+}
+
+// --- 11. Las tres causas que comparten status ------------------------------
+// Es la razón de ser del comando —«¿por qué me da 403, 402, o un 200 que en
+// realidad es un error?»— y hasta acá no la afirmaba nadie.
+//
+// Se fabrican porque NO se pueden producir: una celda sana no devuelve un 402,
+// y pedir un plan sin el módulo agéntico para ver un mensaje es más caro que el
+// mensaje. Es el mismo motivo por el que las negativas del bucle se prueban con
+// respuestas fabricadas: lo que hay que ver es la clasificación, y para verla
+// hay que fabricar la entrada.
+//
+// El `402` es el caso caro: tres cosas distintas con el mismo status y tres
+// remedios que no se parecen —cambiar de plan, cargar saldo, hablar con
+// administración—. Confundirlas manda a rotar una key que estaba bien.
+const err = (status, opts = {}) => new ApiTransportError(opts.mensaje ?? "x", { status, ...opts });
+
+comprobar("401 es la credencial, y entonces no se puede afirmar nada de sus scopes", clasificar(err(401)).clase, "credencial");
+comprobar("403 es un scope: la key y el plan están bien", clasificar(err(403)).clase, "scope");
+comprobar("404 no distingue ausente de ajeno, y lo dice", clasificar(err(404)).clase, "no-encontrado");
+
+// Las tres caras del 402.
+comprobar(
+  "402 con MODULE_NOT_ENTITLED es el PLAN, no la key",
+  clasificar(err(402, { code: "MODULE_NOT_ENTITLED" })).clase,
+  "plan",
+);
+comprobar(
+  "y su detalle dice que pedir scopes no lo arregla",
+  clasificar(err(402, { code: "MODULE_NOT_ENTITLED" })).detalle,
+  "el plan no incluye el módulo agéntico",
+);
+comprobar(
+  "402 por saldo es otra cosa: la key y el plan están bien",
+  clasificar(err(402, { mensaje: "Insufficient credits for this operation" })).clase,
+  "creditos",
+);
+comprobar(
+  "402 sin más señas es el workspace: suspendido o forzando SSO",
+  clasificar(err(402, { mensaje: "Workspace is not operational" })).clase,
+  "workspace",
+);
+// El control en la dirección contraria, que es donde un clasificador se rompe:
+// las tres ramas del 402 no pueden colapsar en una. Si `plan` se comiera a
+// `creditos`, el informe mandaría a cambiar de plan a quien solo necesita saldo.
+comprobar("y las tres caras del 402 son distintas entre sí", new Set([
+  clasificar(err(402, { code: "MODULE_NOT_ENTITLED" })).clase,
+  clasificar(err(402, { mensaje: "Insufficient credits" })).clase,
+  clasificar(err(402, { mensaje: "Workspace suspended" })).clase,
+]).size, 3);
+// `code` gana sobre el texto, pero el texto solo también alcanza: el servidor no
+// siempre manda `code`, y sin este camino un 402 de plan se leería como
+// workspace cerrado — que manda a hablar con administración en vez de a mirar el
+// plan.
+comprobar(
+  "sin `code`, el texto del cuerpo alcanza para reconocer el plan",
+  clasificar(err(402, { mensaje: "This module is not enabled for your plan" })).clase,
+  "plan",
+);
+// Y lo que NO es un error de transporte no se disfraza de uno.
+comprobar("un error que no es de transporte se reporta como tal", clasificar(new TypeError("boom")).clase, "error");
+
+// Y que la distinción LLEGUE al informe, que es lo que se lee. La clase no
+// sirve de nada si las tres salen bajo el mismo título: el remedio de cada una
+// se elige mirando esta línea.
+{
+  const base = { celda: { url: "https://celda.invalid", alcanzable: true }, scopes: {}, alternativas: {}, sondeos: [], avisos: [] };
+  const linea = (estado) => formatearInforme({ ...base, credencial: { estado } }).join("\n");
+  comprobar("el informe titula el 402 de plan como plan", /no incluye el módulo agéntico/.test(linea("plan")), true);
+  comprobar("y agrega que pedir scopes no lo arregla", /pedir más scopes no lo arregla/.test(linea("plan")), true);
+  comprobar("el de workspace manda a otro lado", /suspendido, o forzando SSO/.test(linea("workspace")), true);
+  comprobar("y el de plan NO dice lo del workspace", /suspendido, o forzando SSO/.test(linea("plan")), false);
+  comprobar("el de créditos no culpa ni a la key ni al plan", /la key y los permisos están bien/.test(linea("creditos")), true);
 }
 
 console.log(fallos ? `\n${fallos} fallos` : "\nTodo en verde.");

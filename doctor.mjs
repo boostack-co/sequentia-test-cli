@@ -110,8 +110,23 @@ export function clasificar(err) {
   const { status, code } = err;
   if (status === 401) return { clase: "credencial", detalle: "la key no fue aceptada" };
   if (status === 402) {
-    if (code === "MODULE_NOT_ENTITLED") return { clase: "plan", detalle: "el plan no incluye el módulo agéntico" };
-    if (/credit/i.test(String(err.message))) return { clase: "creditos", detalle: "sin créditos de IA" };
+    // Tres cosas con el mismo status y tres remedios que no se parecen: cambiar
+    // de plan, cargar saldo, o hablar con administración. Confundirlas manda a
+    // rotar una key que estaba bien.
+    //
+    // Se mira el cuerpo además del `code` porque el cliente ya lo hace
+    // (`api-client.mjs` clasifica con `code === "MODULE_NOT_ENTITLED" ||
+    // /module/i`), y las dos lecturas habían divergido: sin `code`, el cliente
+    // decía "el plan no incluye el módulo" y este clasificador decía "workspace
+    // no operativo" — el mismo 402 mandando a mirar el plan por un lado y a
+    // hablar con administración por el otro. La `clase` es lo que después elige
+    // el remedio que el informe recomienda, así que la discrepancia no era
+    // cosmética.
+    const texto = `${err.message ?? ""} ${err.body ?? ""}`;
+    if (code === "MODULE_NOT_ENTITLED" || /module/i.test(texto)) {
+      return { clase: "plan", detalle: "el plan no incluye el módulo agéntico" };
+    }
+    if (/credit/i.test(texto)) return { clase: "creditos", detalle: "sin créditos de IA" };
     return { clase: "workspace", detalle: "el workspace no está operativo (suspendido o con SSO forzado)" };
   }
   if (status === 403) return { clase: "scope", detalle: "acceso denegado" };
