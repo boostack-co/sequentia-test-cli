@@ -18,6 +18,7 @@
 // y la que quedara vieja dejaría pasar lo que el servidor rechaza.
 import { VERIFY_CLAIM_MAX } from "./agent.mjs";
 import { UsageError, loadDotenv } from "./commands.mjs";
+import { describirFalloFetch } from "./http-comun.mjs";
 
 /** La única cifra de política. Todo lo demás se deriva de la respuesta. */
 export const MAX_SEND_RISK = 0.5;
@@ -232,8 +233,7 @@ async function postearAlModelo(url, headers, cuerpo, timeoutMs) {
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
-    const razon = err?.name === "TimeoutError" ? `timeout tras ${timeoutMs} ms` : err?.message || String(err);
-    throw new LlmError(`No se pudo contactar tu modelo en ${url}: ${razon}`);
+    throw new LlmError(`No se pudo contactar tu modelo en ${url}: ${describirFalloFetch(err, timeoutMs)}`);
   }
   return { res, texto: await res.text() };
 }

@@ -17,6 +17,8 @@
  *     un string JSON.
  */
 
+import { describeErrorBody, describirFalloFetch, esperaSugerida, leerRateLimit, safeJson } from "./http-comun.mjs";
+
 export const PROTOCOL_VERSION = "2025-06-18";
 const CLIENT_INFO = { name: "sq-test-cli", version: "1.0.0" };
 
@@ -59,11 +61,17 @@ export function parseSseFrames(text, wantedId) {
     if (!rawLine.startsWith("data:")) continue;
     const payload = rawLine.slice(5).trim();
     if (!payload || payload === "[DONE]") continue;
+    let frame;
     try {
-      frames.push(JSON.parse(payload));
+      frame = JSON.parse(payload);
     } catch {
       // Un frame ilegible no debe tumbar la respuesta entera.
+      continue;
     }
+    // Solo objetos: un `data: null` o `data: 123` es JSON válido, pero abajo se
+    // le pregunta `.id` y `"result" in`, y eso tumbaba la respuesta entera con
+    // un TypeError crudo aunque el frame bueno viniera en la línea siguiente.
+    if (frame && typeof frame === "object" && !Array.isArray(frame)) frames.push(frame);
   }
   if (wantedId !== undefined && wantedId !== null) {
     const match = frames.find((f) => f.id === wantedId);
@@ -120,15 +128,10 @@ export class SequentiaMcpClient {
   }
 
   #captureRateLimit(res) {
-    const remaining = res.headers.get("ratelimit-remaining");
-    if (remaining === null) return;
-    this.rateLimit = {
-      limit: res.headers.get("ratelimit-limit"),
-      remaining,
-      reset: res.headers.get("ratelimit-reset"),
-      policy: res.headers.get("ratelimit-policy"),
-    };
-    this.#debug(`ratelimit: ${remaining}/${this.rateLimit.limit} restantes, reset en ${this.rateLimit.reset}s`);
+    const rl = leerRateLimit(res);
+    if (!rl) return;
+    this.rateLimit = rl;
+    this.#debug(`ratelimit: ${rl.remaining}/${rl.limit} restantes, reset en ${rl.reset}s`);
   }
 
   /** POST crudo al endpoint. Devuelve { res, text }. */
@@ -142,8 +145,7 @@ export class SequentiaMcpClient {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
-      const reason = err?.name === "TimeoutError" ? `timeout tras ${this.timeoutMs} ms` : err?.message || String(err);
-      throw new McpTransportError(`No se pudo contactar ${this.url}: ${reason}`);
+      throw new McpTransportError(`No se pudo contactar ${this.url}: ${describirFalloFetch(err, this.timeoutMs)}`);
     }
     this.#captureRateLimit(res);
     const text = await res.text();
@@ -210,7 +212,9 @@ export class SequentiaMcpClient {
     if (!allowRetry) {
       throw new McpTransportError(`Rate limit persistente (HTTP ${res.status}) tras reintentar`, { status: res.status, body: text });
     }
-    const waitS = Math.min(Number(res.headers.get("retry-after")) || Number(res.headers.get("ratelimit-reset")) || 5, 60);
+    // `esperaSugerida` y no `Number(h) || 5`: un `Retry-After: 0` es "reintentá
+    // ya", y con el idioma del `||` caía en el default de cinco segundos.
+    const waitS = Math.min(esperaSugerida(res) ?? 5, 60);
     this.#debug(`HTTP ${res.status}: esperando ${waitS}s antes de reintentar ${label}`);
     await new Promise((r) => setTimeout(r, waitS * 1000));
     return this.#postWithRetry(body, label, { allowRetry: false });
@@ -393,28 +397,9 @@ export class SequentiaMcpClient {
     this.#connecting = null;
     if (pending.length === 0) return;
 
-    for (const sid of pending) {
-      // Un 400/404 acá suele ser ruteo: el DELETE cayó en una réplica que no
-      // es la dueña, y la sesión sigue viva. Cloud Run reparte entre
-      // instancias, así que reintentar tiene chance real de pegarle a la
-      // correcta. Lo que aun así no cierre se CONSERVA en #knownSessions: un
-      // segundo close() lo vuelve a intentar en vez de perderlo para siempre.
-      let ok = false;
-      for (let intento = 1; intento <= DELETE_ATTEMPTS && !ok; intento++) {
-        try {
-          const res = await fetch(this.url, {
-            method: "DELETE",
-            headers: { ...this.#headers(), "Mcp-Session-Id": sid },
-            signal: AbortSignal.timeout(10_000),
-          });
-          ok = res.status === 204 || res.ok;
-          if (!ok) this.#debug(`DELETE de ${sid} devolvió HTTP ${res.status} (intento ${intento}/${DELETE_ATTEMPTS})`);
-        } catch (err) {
-          this.#debug(`DELETE de ${sid} falló: ${err?.message ?? err} (intento ${intento}/${DELETE_ATTEMPTS})`);
-        }
-      }
-      if (ok) this.#knownSessions.delete(sid);
-    }
+    // En paralelo: cada sesión es independiente, y cerrarlas una tras otra
+    // multiplicaba la espera por la cantidad de huérfanas.
+    await Promise.allSettled(pending.map((sid) => this.#cerrarSesion(sid)));
 
     if (this.#knownSessions.size) {
       this.#debug(
@@ -424,21 +409,39 @@ export class SequentiaMcpClient {
       );
     }
   }
-}
 
-function safeJson(text) {
-  if (typeof text !== "string" || text.trim() === "") return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
+  /**
+   * DELETE de una sesión. Se reintenta SOLO ante 400/404, que es el caso del
+   * ruteo multi-réplica: el DELETE cayó en una réplica que no es la dueña, y
+   * la sesión sigue viva; Cloud Run reparte entre instancias, así que volver a
+   * intentar tiene chance real de pegarle a la correcta.
+   *
+   * Un fallo de transporte (timeout, conexión rechazada) NO se reintenta: si
+   * el gateway no contesta, tres intentos de diez segundos son treinta
+   * segundos de espera al salir de cada comando, por cada sesión, para llegar
+   * al mismo lugar. Lo que no cierre se CONSERVA en #knownSessions: un segundo
+   * close() lo vuelve a intentar en vez de perderlo para siempre.
+   */
+  async #cerrarSesion(sid) {
+    for (let intento = 1; intento <= DELETE_ATTEMPTS; intento++) {
+      let res;
+      try {
+        res = await fetch(this.url, {
+          method: "DELETE",
+          headers: { ...this.#headers(), "Mcp-Session-Id": sid },
+          signal: AbortSignal.timeout(10_000),
+        });
+      } catch (err) {
+        this.#debug(`DELETE de ${sid} falló: ${describirFalloFetch(err, 10_000)}`);
+        return;
+      }
+      if (res.status === 204 || res.ok) {
+        this.#knownSessions.delete(sid);
+        return;
+      }
+      this.#debug(`DELETE de ${sid} devolvió HTTP ${res.status} (intento ${intento}/${DELETE_ATTEMPTS})`);
+      if (res.status !== 400 && res.status !== 404) return;
+    }
   }
 }
 
-/** Saca un mensaje legible de un cuerpo de error, sea JSON-RPC o de Express. */
-function describeErrorBody(text) {
-  const body = safeJson(text);
-  if (!body) return String(text ?? "").slice(0, 300);
-  const msg = body.error?.message ?? body.message ?? body.error_description ?? (typeof body.error === "string" ? body.error : null);
-  return msg ? String(msg) : String(text).slice(0, 300);
-}
