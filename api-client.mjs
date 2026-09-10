@@ -19,20 +19,51 @@
  * error tiene que decir qué hacer.
  */
 
+import { describeErrorBody, describirFalloFetch, esperaSugerida, leerRateLimit, safeJson } from "./http-comun.mjs";
+
 /** El prefijo que llevan todas las rutas. Se agrega acá, una sola vez. */
 export const API_PREFIX = "/api/v1";
 
 /** Falla del transporte, de autenticación, de plan o de rate limit. */
 export class ApiTransportError extends Error {
-  constructor(message, { status = null, body = null, code = null, wwwAuthenticate = null } = {}) {
+  constructor(message, { status = null, body = null, code = null, causa = null, wwwAuthenticate = null } = {}) {
     super(message);
     this.name = "ApiTransportError";
     this.status = status;
     this.body = body;
     /** El `code` del cuerpo cuando lo trae (`MODULE_NOT_ENTITLED`, `RATE_LIMITED`, …). */
     this.code = code;
+    /**
+     * La causa ya clasificada (ver `causaDe`), para que quien la consuma no
+     * tenga que volver a deducirla del texto que este mismo cliente compuso.
+     */
+    this.causa = causa;
     this.wwwAuthenticate = wwwAuthenticate;
   }
+}
+
+/**
+ * Las causas que comparten status, y el remedio de cada una es otro.
+ *
+ * Es la ÚNICA lectura: `#httpError` la usa para elegir el mensaje y la deja
+ * en `err.causa`, y `api doctor` la consume de ahí. Antes `doctor.mjs` tenía
+ * su propia copia de estas regex sobre el texto que este cliente compone, y
+ * las dos copias ya habían divergido una vez (un 402 de plan sin `code` se
+ * leía como workspace cerrado por un lado y como plan por el otro).
+ *
+ * @returns {"credencial"|"plan"|"creditos"|"workspace"|"lista-blanca"|"scope"|"no-encontrado"|null}
+ */
+export function causaDe(status, code, detail) {
+  const texto = String(detail ?? "");
+  if (status === 401) return "credencial";
+  if (status === 402) {
+    if (code === "MODULE_NOT_ENTITLED" || /module/i.test(texto)) return "plan";
+    if (/credit/i.test(texto)) return "creditos";
+    return "workspace";
+  }
+  if (status === 403) return /knowledge base/i.test(texto) ? "lista-blanca" : "scope";
+  if (status === 404) return "no-encontrado";
+  return null;
 }
 
 /**
@@ -84,21 +115,12 @@ export class SequentiaApiClient {
     if (this.onDebug) this.onDebug(msg);
   }
 
-  /**
-   * El presupuesto de rate limit. Se leen las dos grafías porque conviven: la
-   * REST manda `X-RateLimit-*` y el borde MCP manda `ratelimit-*`. `get()` es
-   * case-insensitive, así que lo único que hace falta es probar ambas.
-   */
+  /** El presupuesto de rate limit, en cualquiera de sus dos grafías. */
   #captureRateLimit(res) {
-    const remaining = res.headers.get("x-ratelimit-remaining") ?? res.headers.get("ratelimit-remaining");
-    if (remaining === null) return;
-    this.rateLimit = {
-      limit: res.headers.get("x-ratelimit-limit") ?? res.headers.get("ratelimit-limit"),
-      remaining,
-      reset: res.headers.get("x-ratelimit-reset") ?? res.headers.get("ratelimit-reset"),
-      retryAfter: res.headers.get("retry-after"),
-    };
-    this.#debug(`ratelimit: ${remaining}/${this.rateLimit.limit} restantes, reset ${this.rateLimit.reset}`);
+    const rl = leerRateLimit(res);
+    if (!rl) return;
+    this.rateLimit = rl;
+    this.#debug(`ratelimit: ${rl.remaining}/${rl.limit} restantes, reset ${rl.reset}`);
   }
 
   #headers({ auth, hasBody }) {
@@ -124,9 +146,8 @@ export class SequentiaApiClient {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (err) {
-      const reason = err?.name === "TimeoutError" ? `timeout tras ${this.timeoutMs} ms` : err?.message || String(err);
       throw new ApiTransportError(
-        `No se pudo contactar ${url}: ${reason}\n` +
+        `No se pudo contactar ${url}: ${describirFalloFetch(err, this.timeoutMs)}\n` +
           `  Si el host no resuelve, el problema es la URL de la celda y no la credencial.`,
       );
     }
@@ -200,9 +221,10 @@ export class SequentiaApiClient {
     const body = safeJson(text);
     const detail = describeErrorBody(text);
     const code = body?.code ?? null;
-    const opts = { status: res.status, body: text, code, wwwAuthenticate: res.headers.get("www-authenticate") };
+    const causa = causaDe(res.status, code, detail);
+    const opts = { status: res.status, body: text, code, causa, wwwAuthenticate: res.headers.get("www-authenticate") };
 
-    if (res.status === 401) {
+    if (causa === "credencial") {
       return new ApiTransportError(
         `Token rechazado (401). ${detail}\n` +
           `  Una key válida empieza con "sk_live_"; las de la extensión de navegador no sirven acá.`,
@@ -210,37 +232,37 @@ export class SequentiaApiClient {
       );
     }
 
-    if (res.status === 402) {
-      // Tres cosas distintas con el mismo status, y el remedio de cada una es
-      // otro: cambiar de plan, cargar créditos, o hablar con administración.
-      if (code === "MODULE_NOT_ENTITLED" || /module/i.test(detail)) {
-        return new ApiTransportError(
-          `El plan del workspace no incluye el módulo agéntico (402). ${detail}\n` +
-            `  Es cuestión de plan, no de scopes: ninguna key lo abre.`,
-          opts,
-        );
-      }
-      if (/credit/i.test(detail)) {
-        return new ApiTransportError(
-          `Sin créditos de IA (402). ${detail}\n` +
-            `  La credencial y el plan están bien; lo que falta es saldo.`,
-          opts,
-        );
-      }
+    // Tres cosas distintas con el mismo status 402, y el remedio de cada una es
+    // otro: cambiar de plan, cargar créditos, o hablar con administración.
+    // La distinción la hace `causaDe`; acá solo se elige el mensaje.
+    if (causa === "plan") {
+      return new ApiTransportError(
+        `El plan del workspace no incluye el módulo agéntico (402). ${detail}\n` +
+          `  Es cuestión de plan, no de scopes: ninguna key lo abre.`,
+        opts,
+      );
+    }
+    if (causa === "creditos") {
+      return new ApiTransportError(
+        `Sin créditos de IA (402). ${detail}\n` + `  La credencial y el plan están bien; lo que falta es saldo.`,
+        opts,
+      );
+    }
+    if (causa === "workspace") {
       return new ApiTransportError(
         `El workspace no está operativo (402). ${detail}\n` + `  La key es válida: lo que está cerrado es el workspace.`,
         opts,
       );
     }
 
-    if (res.status === 403) {
-      if (/knowledge base/i.test(detail)) {
-        return new ApiTransportError(
+    if (causa === "lista-blanca") {
+      return new ApiTransportError(
           `La key no tiene acceso a esa knowledge base (403). ${detail}\n` +
             `  No es un scope faltante: es la lista blanca de KBs de la credencial.`,
-          opts,
-        );
-      }
+        opts,
+      );
+    }
+    if (causa === "scope") {
       return new ApiTransportError(
         `Acceso denegado (403). ${detail}\n` +
           `  Si el mensaje nombra un scope, la key no lo tiene. Ojo: los formularios de Admin Studio ` +
@@ -249,7 +271,7 @@ export class SequentiaApiClient {
       );
     }
 
-    if (res.status === 404) {
+    if (causa === "no-encontrado") {
       // Deliberado del servidor: una KB inexistente y una de otro workspace
       // contestan igual, para no revelar cuáles existen. Decirlo evita que
       // alguien se pase la tarde buscando un id que sí era correcto.
@@ -293,37 +315,3 @@ export class SequentiaApiClient {
   }
 }
 
-/**
- * Cuántos segundos pide esperar el servidor, o `null` si no lo dice.
- *
- * Devuelve `null` y no `0` para "no dijo nada", porque **cero es una respuesta
- * válida**: significa reintentá ya. Con el idioma `Number(h) || default`, un
- * `Retry-After: 0` caía en el default y hacía esperar cinco segundos de más —
- * exactamente al revés de lo que el servidor pidió.
- */
-function esperaSugerida(res) {
-  for (const h of ["retry-after", "x-ratelimit-reset", "ratelimit-reset"]) {
-    const raw = res.headers.get(h);
-    if (raw === null) continue;
-    const n = Number(raw);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
-  return null;
-}
-
-function safeJson(text) {
-  if (typeof text !== "string" || text.trim() === "") return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-/** Saca un mensaje legible del cuerpo de error, que la celda emite como `{error, message}`. */
-function describeErrorBody(text) {
-  const body = safeJson(text);
-  if (!body) return String(text ?? "").slice(0, 300);
-  const msg = body.message ?? body.error_description ?? (typeof body.error === "string" ? body.error : null);
-  return msg ? String(msg) : String(text).slice(0, 300);
-}

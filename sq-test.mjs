@@ -14,17 +14,16 @@
  */
 
 import { stdin, stdout } from "node:process";
-import { SequentiaMcpClient, McpToolError, McpTransportError } from "./mcp-client.mjs";
-import { SequentiaApiClient, ApiTransportError } from "./api-client.mjs";
+import { SequentiaMcpClient, McpToolError } from "./mcp-client.mjs";
+import { SequentiaApiClient } from "./api-client.mjs";
 import { diagnosticar, formatearInforme } from "./doctor.mjs";
-import { CACHE_FILE, SyncError, catalogoDe, comparar, formatearDerivas, guardarCache, traerPublicada } from "./collection-sync.mjs";
+import { CACHE_FILE, catalogoDe, comparar, formatearDerivas, guardarCache, traerPublicada } from "./collection-sync.mjs";
+import { EXIT_OK, EXIT_TOOL_ERROR, EXIT_TRANSPORT, EXIT_USAGE, describirError } from "./errores.mjs";
 import {
   MANAGED_MAX_RESULTS,
   MAX_SEND_RISK,
   valorSeguroParaComando,
   resolveLlmConfig,
-  ContractError,
-  LlmError,
   correrBucle,
   decisionDe,
   narrar,
@@ -38,7 +37,6 @@ import {
   recordarRetrieval,
 } from "./agent.mjs";
 import {
-  CatalogError,
   VARIABLES_RESERVADAS,
   buscarPeticion,
   cargarCatalogo,
@@ -46,12 +44,10 @@ import {
   necesitaConfirmacion,
   resolverPeticion,
 } from "./catalog.mjs";
-import { mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { dirname } from "node:path";
 import {
   API_URL_KEY,
-  COLLECTION_URL_KEY,
   COMMANDS,
   DEFAULT_URL,
   PLACEHOLDER_KB_ID,
@@ -60,6 +56,7 @@ import {
   USER_ENV_FILE,
   UsageError,
   buildCommandLine,
+  esUuid,
   formatMs,
   intInRange,
   invocationPrefix,
@@ -68,19 +65,21 @@ import {
   printPretty,
   printTable,
   resolveApiConfig,
+  resolveCollectionUrl,
   resolveConfig,
   required,
   resolveKbId,
+  resolveKbIdApi,
+  resolverKbsDeFlags,
 } from "./commands.mjs";
-
-const EXIT_OK = 0;
-const EXIT_TOOL_ERROR = 1;
-const EXIT_USAGE = 2;
-const EXIT_TRANSPORT = 3;
 
 // ---------------------------------------------------------------------------
 // Parser de argumentos
 // ---------------------------------------------------------------------------
+/**
+ * Todo lo que el PARSER trata como booleano, de los dos carriles. Es solo la
+ * forma (`--x`, `--x=true`); qué comando acepta cuál es otra lista, abajo.
+ */
 const BOOLEAN_FLAGS = new Set(["json", "raw", "verbose", "yes", "help", "check", "refresh", "no-generate", "managed", "show-evidence"]);
 
 /**
@@ -105,8 +104,14 @@ const SHORT_FLAGS = new Map([
  */
 const REPEATABLE_FLAGS = new Set(["var"]);
 
-/** Opciones válidas en cualquier comando. Las propias de cada uno van en `opts`. */
-const GLOBAL_FLAGS = new Set([...BOOLEAN_FLAGS, "url", "token"]);
+/**
+ * Opciones válidas en cualquier comando MCP. Las propias de cada uno van en
+ * `opts`. Se enumera a mano y NO se deriva de `BOOLEAN_FLAGS`: derivarla hacía
+ * que `list-kbs --managed` o `query-kb … --show-evidence` —booleanos del
+ * carril API— se aceptaran en silencio y no hicieran nada, que es el fallo que
+ * `assertKnownFlags` existe para rechazar.
+ */
+const GLOBAL_FLAGS = new Set(["json", "raw", "verbose", "yes", "help", "url", "token"]);
 
 /**
  * Lo único que tiene sentido al abrir el menú. `--json`, `--raw` y `--yes` son
@@ -369,14 +374,6 @@ function parseVars(lista) {
 }
 
 /**
- * `sq-test api <subcomando>` — el carril REST.
- *
- * Va por su propio camino y no toca el cliente MCP: son transportes distintos,
- * contra hosts distintos, y `api health` ni siquiera necesita credencial. Meter
- * esto en el flujo de arriba obligaría a abrir una sesión MCP —gastando uno de
- * los cinco cupos de la credencial— para una petición que no la usa.
- */
-/**
  * El comando copiable para calificar la corrida despues.
  *
  * Es la tercera superficie de escapado, y la unica con **dos requisitos en
@@ -406,6 +403,19 @@ function comandoParaCalificar(retrievalId, kb) {
   return `\nPara calificar esta corrida:\n  ${linea}`;
 }
 
+/**
+ * `sq-test api <subcomando>` — el carril REST.
+ *
+ * Va por su propio camino y no toca el cliente MCP: son transportes distintos,
+ * contra hosts distintos, y `api health` ni siquiera necesita credencial. Meter
+ * esto en el flujo de arriba obligaría a abrir una sesión MCP —gastando uno de
+ * los cinco cupos de la credencial— para una petición que no la usa.
+ *
+ * `--kb` (y `--kbs`, y `--var kbId=`) aceptan el UUID o el slug, igual que el
+ * carril MCP: el servidor resuelve `knowledgeBaseId` solo por id, así que el
+ * slug se cambia acá contra `GET /knowledge-bases` antes de mandarlo. El
+ * comando impreso conserva lo que se escribió.
+ */
 async function comandoApi(flags, positional) {
   const cmd = invocationPrefix();
   const disponibles = [...Object.keys(API_SUBCOMMANDS), ...Object.keys(AGENT_COMMANDS)];
@@ -483,9 +493,14 @@ async function comandoApi(flags, positional) {
     const { apiUrl, token } = resolveApiConfig(flags);
     // El cuerpo se arma DESPUÉS de conocer la celda porque `feedback` valida
     // contra ella el retrievalId recordado: un id de otra celda no identifica
-    // nada acá.
-    const body = spec.build(flags, { celda: apiUrl });
-    const ruta = typeof spec.ruta === "function" ? spec.ruta(flags) : spec.ruta;
+    // nada acá. Y se arma DOS veces: primero con lo tipeado, para que un tope
+    // fuera de rango o un rating inválido fallen antes de salir a la red a
+    // resolver el slug; después con la KB ya resuelta, que es lo que se manda.
+    spec.build(flags, { celda: apiUrl });
+    const client = new SequentiaApiClient({ baseUrl: apiUrl, token, onDebug });
+    const resueltos = await resolverKbsDeFlags(flags, (raw) => resolveKbIdApi(client, raw));
+    const body = spec.build(resueltos, { celda: apiUrl });
+    const ruta = typeof spec.ruta === "function" ? spec.ruta(resueltos) : spec.ruta;
 
     const cabeceras = {};
     if (spec.idempotencia && body !== undefined) {
@@ -497,7 +512,6 @@ async function comandoApi(flags, positional) {
     }
 
     if (onDebug) onDebug(`celda ${apiUrl} · ${spec.metodo} ${ruta}`);
-    const client = new SequentiaApiClient({ baseUrl: apiUrl, token, onDebug });
 
     const t0 = performance.now();
     const { status, data } = await client.request(spec.metodo, ruta, { body, headers: cabeceras });
@@ -506,7 +520,7 @@ async function comandoApi(flags, positional) {
     // Llegar acá ya implica 2xx: `request` lanza ante cualquier otra cosa. Es
     // lo que hace que nunca se recuerde un id venido de un 402, 500 o 502.
     if (spec.captura === "retrievalId" && data?.retrievalId) {
-      recordarRetrieval({ id: data.retrievalId, kb: String(flags.kb), celda: apiUrl });
+      recordarRetrieval({ id: data.retrievalId, kb: String(flags.kb), kbId: resueltos.kb, celda: apiUrl });
     }
 
     if (flags.json) {
@@ -564,29 +578,17 @@ async function comandoApi(flags, positional) {
           `  --refresh  además guarda lo traído en ${CACHE_FILE}`,
       );
     }
-    const { values: dotenv } = loadDotenv();
-    const url = process.env[COLLECTION_URL_KEY] ?? dotenv[COLLECTION_URL_KEY];
-    if (!url) {
-      throw new UsageError(
-        `Falta ${COLLECTION_URL_KEY}: la URL de lectura de la colección publicada.\n` +
-          "  Es la de la API de Postman con su access key, algo con la forma\n" +
-          "  https://api.postman.com/collections/<uid>?access_key=<key>\n" +
-          "  Mientras la colección no esté publicada, este comando no tiene con qué contrastar.\n" +
-          "  Ver collection/PUBLISHING.md.",
-      );
-    }
+    const url = resolveCollectionUrl();
 
     if (onDebug) onDebug(`trayendo ${url.replace(/access_key=[^&]*/, "access_key=…")}`);
     const publicada = await traerPublicada(url);
-    // `cargarCatalogo` lee de un archivo, así que lo traído se escribe antes de
-    // compararlo. Con --refresh eso queda en la caché del usuario; sin él va a
-    // un temporal, porque `--check` es de solo lectura y no debe dejar rastro.
-    const destino = flags.refresh ? guardarCache(publicada) : join(tmpdir(), `sq-test-coleccion-${process.pid}.json`);
-    const remoto = catalogoDe(publicada, destino);
+    // El catálogo se arma ANTES de guardar: armarlo es lo que valida, y una
+    // colección remota rota no tiene que quedar en la caché con el comando
+    // fallando. `--check` es de solo lectura y no toca el disco.
+    const remoto = catalogoDe(publicada);
     const local = cargarCatalogo();
     const derivas = comparar(local, remoto);
-
-    if (!flags.refresh) rmSync(destino, { force: true });
+    const destino = flags.refresh ? guardarCache(publicada) : null;
 
     if (flags.json) {
       console.log(JSON.stringify({ derivas, cache: flags.refresh ? destino : null }, null, 2));
@@ -643,10 +645,13 @@ async function comandoApi(flags, positional) {
       let maxResults;
       if (flags["max-results"] !== undefined) {
         const tope = flags.managed ? MANAGED_MAX_RESULTS : RETRIEVE_MAX_RESULTS;
-        maxResults = intInRange(flags, "max-results", 1, tope);
-        if (flags.managed && maxResults > MANAGED_MAX_RESULTS) {
+        if (flags.managed && Number(flags["max-results"]) > MANAGED_MAX_RESULTS) {
+          // Antes del chequeo genérico, para que se lea el POR QUÉ del tope y
+          // no solo el rango: el genérico lo rechazaría igual, pero diciendo
+          // "entre 1 y 20" sin nombrar al carril gestionado.
           throw new UsageError(`--managed contrasta contra /agent/query, que topa en ${MANAGED_MAX_RESULTS}.`);
         }
+        maxResults = intInRange(flags, "max-results", 1, tope);
       }
 
       // `--no-generate` para tras recuperar, así que ni verifica ni contrasta:
@@ -670,6 +675,9 @@ async function comandoApi(flags, positional) {
       // Es lo que hace que el 2 signifique de verdad "rechazada antes de empezar".
       const llm = flags["no-generate"] ? null : resolveLlmConfig(flags);
       const client = new SequentiaApiClient({ baseUrl: apiUrl, token, onDebug });
+      // El slug se resuelve acá, con TODO ya validado: es la primera llamada
+      // a la red, y no gasta créditos.
+      const kbId = await resolveKbIdApi(client, kb);
 
       // La narración va a stderr siempre: bajo --json el único valor de stdout es
       // la traza, y sin --json el informe se lee igual con el progreso al lado.
@@ -685,14 +693,13 @@ async function comandoApi(flags, positional) {
         client,
         traza,
         pregunta,
-        kb,
+        kb: kbId,
         opciones: {
           umbral,
           maxResults,
           generarRespuesta: !flags["no-generate"],
           llm,
           gestionado: Boolean(flags.managed),
-          flags,
           onDebug,
         },
         // Los pasos son PROGRESO y van a stderr. La decisión no: es el
@@ -774,11 +781,16 @@ async function comandoApi(flags, positional) {
 
     // Resolver antes de pedir la config: una variable faltante es un error de
     // uso, y tiene que verse aunque todavía no haya celda configurada.
-    const peticion = resolverPeticion(entrada, vars, coleccion);
+    let peticion = resolverPeticion(entrada, vars, coleccion);
 
     const { apiUrl, token } = resolveApiConfig(flags, { requireToken: entrada.auth });
-    if (onDebug) onDebug(`celda ${apiUrl} · ${peticion.metodo} ${peticion.ruta}`);
     const client = new SequentiaApiClient({ baseUrl: apiUrl, token, onDebug });
+    // `{{kbId}}` es la variable que la colección usa para la KB, y acepta el
+    // slug igual que `--kb`: se resuelve con una petición que no gasta nada.
+    if (vars.kbId !== undefined && !esUuid(vars.kbId)) {
+      peticion = resolverPeticion(entrada, { ...vars, kbId: await resolveKbIdApi(client, vars.kbId) }, coleccion);
+    }
+    if (onDebug) onDebug(`celda ${apiUrl} · ${peticion.metodo} ${peticion.ruta}`);
 
     const t0 = performance.now();
     const { status, data } = await client.request(peticion.metodo, peticion.ruta, {
@@ -968,28 +980,15 @@ let parsedFlags = {};
 try {
   process.exitCode = await main();
 } catch (err) {
-  if (err instanceof UsageError || err instanceof CatalogError) {
-    console.error(`Error: ${err.message}`);
-    process.exitCode = EXIT_USAGE;
-  } else if (err instanceof McpToolError) {
-    // Con --raw el sobre JSON-RPC va a stdout igual que en el camino feliz:
-    // depurar el transporte hace falta sobre todo cuando algo falla.
-    if (parsedFlags.raw && err.envelope) console.log(JSON.stringify(err.envelope, null, 2));
-    console.error(`La herramienta ${err.tool} devolvió un error:\n  ${err.message}`);
-    process.exitCode = EXIT_TOOL_ERROR;
-  } else if (err instanceof ContractError || err instanceof LlmError) {
-    // Sale con 1, no con 3: la llamada llegó y contestó 2xx — lo que no se
-    // sostuvo fue el cuerpo. No es transporte ni auth, es "la operación se
-    // hizo y el resultado es negativo", que en este CLI es 1.
-    console.error(`Error: ${err.message}`);
-    process.exitCode = EXIT_TOOL_ERROR;
-  } else if (err instanceof McpTransportError || err instanceof ApiTransportError || err instanceof SyncError) {
-    console.error(`Error de transporte: ${err.message}`);
-    if (err.wwwAuthenticate) console.error(`  WWW-Authenticate: ${err.wwwAuthenticate}`);
-    if (err.body) console.error(`  Respuesta: ${String(err.body).slice(0, 500)}`);
-    process.exitCode = EXIT_TRANSPORT;
-  } else {
-    console.error(err?.stack ?? String(err));
-    process.exitCode = EXIT_TRANSPORT;
-  }
+  // Con --raw el sobre JSON-RPC va a stdout igual que en el camino feliz:
+  // depurar el transporte hace falta sobre todo cuando algo falla.
+  if (err instanceof McpToolError && parsedFlags.raw && err.envelope) console.log(JSON.stringify(err.envelope, null, 2));
+  // Qué es y qué se muestra lo decide `describirError`, compartido con el menú;
+  // acá solo se pone el prefijo del CLI y el exit code.
+  const { clase, codigo, lineas } = describirError(err);
+  const [primera, ...resto] = lineas;
+  const prefijo = clase === "uso" || clase === "contrato" ? "Error: " : clase === "transporte" ? "Error de " : "";
+  console.error(`${prefijo}${primera}`);
+  for (const linea of resto) console.error(linea);
+  process.exitCode = codigo;
 }

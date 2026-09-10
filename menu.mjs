@@ -12,34 +12,34 @@
 
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
-import { rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SequentiaMcpClient, McpToolError, McpTransportError } from "./mcp-client.mjs";
+import { SequentiaMcpClient } from "./mcp-client.mjs";
 import { SequentiaApiClient } from "./api-client.mjs";
 import { AGENT_COMMANDS, RETRIEVAL_TTL_MS, agentNecesitaConfirmacion, claveIdempotencia, recordarRetrieval } from "./agent.mjs";
 import { buscarPeticion, cargarCatalogo, efectosDe, necesitaConfirmacion, resolverPeticion } from "./catalog.mjs";
 import { diagnosticar, formatearInforme } from "./doctor.mjs";
 import { catalogoDe, comparar, formatearDerivas, guardarCache, traerPublicada } from "./collection-sync.mjs";
-import { MAX_SEND_RISK, correrBucle, narrar, resolveLlmConfig } from "./loop.mjs";
+import { describirError } from "./errores.mjs";
+import { MAX_SEND_RISK, correrBucle, narrar, resolveLlmConfig, valorSeguroParaComando } from "./loop.mjs";
 import {
   COMMANDS,
   DEFAULT_URL,
   TOKEN_KEY,
   USER_ENV_FILE,
-  PLACEHOLDER_KB_ID,
   SIDE_EFFECT_TOOLS,
-  UsageError,
   buildCommandLine,
+  buscarKb,
+  esUuid,
   formatMs,
+  kbsDeRespuesta,
   maskToken,
   printTable,
-  COLLECTION_URL_KEY,
-  loadDotenv,
   printPretty,
   resolveApiConfig,
+  resolveCollectionUrl,
   resolveConfig,
   resolveKbId,
+  resolveKbIdApi,
+  resolverKbsDeFlags,
 } from "./commands.mjs";
 
 const TITULO = "Test de Integraciones SEQUENTIA";
@@ -121,9 +121,15 @@ class Sesion {
     return this.client;
   }
 
-  /** Cambiar la API key o el endpoint obliga a rehacer el handshake. */
+  /**
+   * Cambiar la API key o el endpoint obliga a rehacer el handshake — y a tirar
+   * el cliente REST cacheado, que se construyó con el token anterior. Sin eso
+   * la key nueva valía para el carril MCP y el REST seguía gastando créditos
+   * con la vieja, sin que nada lo dijera.
+   */
   async reset(cambios) {
     Object.assign(this, cambios);
+    this.api = null;
     await this.cerrar();
   }
 
@@ -142,7 +148,7 @@ class Sesion {
  * Corre un comando del catálogo y lo enmarca entre la línea reproducible y el
  * tiempo. Nunca lanza: un error de herramienta se muestra y el menú sigue.
  */
-async function ejecutar(sesion, commandName, flags, { extra = {} } = {}) {
+async function ejecutar(sesion, commandName, flags, { extra = {}, kbId } = {}) {
   const command = COMMANDS[commandName];
   const needsYes = Object.hasOwn(SIDE_EFFECT_TOOLS, command.tool);
   const linea = buildCommandLine(commandName, flags, { needsYes, url: sesion.url });
@@ -155,10 +161,10 @@ async function ejecutar(sesion, commandName, flags, { extra = {} } = {}) {
   let msResolverKb = 0;
 
   try {
-    // La KB se resuelve aparte y se cronometra aparte: es una llamada extra y
-    // atribuirle ese tiempo al RAG daría una lectura falsa.
-    let kbId;
-    if (flags.kb) {
+    // El selector ya trae el id junto con el slug, así que normalmente no hay
+    // nada que resolver. Cuando lo hay, se cronometra aparte: es una llamada
+    // extra y atribuirle ese tiempo al RAG daría una lectura falsa.
+    if (flags.kb && !kbId) {
       const tKb = performance.now();
       kbId = await resolveKbId(client, String(flags.kb));
       msResolverKb = performance.now() - tKb;
@@ -174,18 +180,28 @@ async function ejecutar(sesion, commandName, flags, { extra = {} } = {}) {
     const ms = performance.now() - t0;
     sesion.huboError = true;
     // El mensaje va DENTRO del marco, igual que la salida buena.
-    if (err instanceof McpToolError || err instanceof UsageError) {
-      console.log(`  ✗ ${err.message}`);
-    } else if (err instanceof McpTransportError) {
-      console.log(`  ✗ transporte: ${err.message}`);
-    } else {
-      console.log(`  ✗ ${err?.message ?? err}`);
-    }
+    imprimirError(err);
     console.log(`  ${RAYA}`);
     // El tiempo se imprime igual: cuánto tardó en fallar es un dato, sobre
     // todo en timeouts y rate limits.
     console.log(`  ${pie(ms, msResolverKb, null, client)}`);
   }
+}
+
+/**
+ * Un error, con el `✗` del menú. Qué es y qué se muestra lo decide
+ * `describirError`, compartido con el CLI: antes cada `catch` de este archivo
+ * tenía su propia cadena de `instanceof`, ninguna conocía los errores del
+ * carril API, y un 401 REST salía como un `✗ mensaje` pelado — sin el
+ * `transporte:`, la cabecera `WWW-Authenticate` ni el cuerpo que el CLI
+ * muestra para el mismo error. Un error inesperado (un bug) sale con su
+ * stack, y el menú sigue: cerrarlo dejaría al usuario sin poder entrar a
+ * Configuración a corregir lo que lo causó.
+ */
+function imprimirError(err, salida = console.log) {
+  const { lineas } = describirError(err);
+  salida(`  ✗ ${lineas[0]}`);
+  for (const linea of lineas.slice(1)) salida(`  ${linea}`);
 }
 
 /** Línea de cierre: wall-clock, latencia del servidor y presupuesto restante. */
@@ -204,13 +220,28 @@ function pie(ms, msResolverKb, data, client) {
 // ---------------------------------------------------------------------------
 // Prompts
 // ---------------------------------------------------------------------------
+/**
+ * @returns {{ flags: object, kbId?: string }} los flags tal como se imprimen
+ *   (la KB por su slug) y, aparte, el id que el selector ya conoce — para no
+ *   volver a pedir la lista entera solo para mapear el slug que acaba de salir
+ *   de ella.
+ */
 async function pedirFlags(rl, sesion, command) {
   const flags = {};
+  let kbId;
   for (const p of command.prompts ?? []) {
-    const valor = p.kind === "kb" ? await pedirKb(rl, sesion, p) : await pedirTexto(rl, p);
+    if (p.kind === "kb") {
+      const kb = await pedirKb(rl, sesion, p);
+      if (kb) {
+        flags[p.opt] = kb.slug;
+        kbId = kb.id;
+      }
+      continue;
+    }
+    const valor = await pedirTexto(rl, p);
     if (valor !== undefined && valor !== "") flags[p.opt] = valor;
   }
-  return flags;
+  return { flags, kbId };
 }
 
 function etiqueta(p) {
@@ -282,9 +313,12 @@ async function pedirKb(rl, sesion, p) {
     }
     const n = Number(raw);
     if (Number.isInteger(n) && n >= 1 && n <= kbs.length) {
-      // Se devuelve el SLUG, no el UUID: el comando impreso queda legible y el
-      // CLI lo resuelve igual.
-      return kbs[n - 1].slug;
+      // El SLUG es lo que se imprime —el comando queda legible y el CLI lo
+      // resuelve igual— y el id es lo que se manda, sin volver a pedir la
+      // lista: cada acción con KB hacía `list_knowledge_bases` DOS veces, una
+      // para el selector y otra para mapear el slug que acababa de elegir.
+      const kb = kbs[n - 1];
+      return { slug: kb.slug ?? kb.id, id: kb.id };
     }
     console.log(`  ✗ elegí un número entre 1 y ${kbs.length}.`);
   }
@@ -338,18 +372,12 @@ async function pantallaRaiz(rl, sesion) {
   const esApi = (n) => Number.isInteger(n) && n >= PRIMERA_SECCION_API && n < PRIMERA_SECCION_API + SECCIONES_API.length;
   if (esApi(nSeccion)) return pantallaSeccionApi(rl, sesion, nSeccion);
 
-  const saltoApi = /^(\d+)\.(\d+)$/.exec(op);
-  if (saltoApi && esApi(Number(saltoApi[1]))) {
-    const item = INDICE_API.get(op);
-    if (item) {
-      await correrItemApi(rl, sesion, item);
-      return rl.question("\n   [Enter para volver] ");
-    }
-  }
-  // Regla 3: el nombre del comando vale como alias, también desde la raíz.
-  const porAlias = INDICE_API.get(op);
-  if (porAlias) {
-    await correrItemApi(rl, sesion, porAlias);
+  // Regla 3 y regla 4 en una: `INDICE_API` está indexado por `S.N` y por
+  // alias, y solo contiene ítems del carril API, así que el salto desde la
+  // raíz y el alias son la misma consulta.
+  const item = INDICE_API.get(op);
+  if (item) {
+    await correrItemApi(rl, sesion, item);
     return rl.question("\n   [Enter para volver] ");
   }
   console.log("   ✗ opción inválida.");
@@ -408,8 +436,9 @@ async function correrItemMcp(rl, sesion, n) {
   // el menú entero con estado 3, justo cuando el usuario necesitaba entrar a
   // Configuración a corregir el token.
   let flags;
+  let kbId;
   try {
-    flags = await pedirFlags(rl, sesion, command);
+    ({ flags, kbId } = await pedirFlags(rl, sesion, command));
   } catch (err) {
     if (err instanceof CancelarAccion) {
       // No es un fallo de la integración: no ensucia el código de salida.
@@ -418,13 +447,8 @@ async function correrItemMcp(rl, sesion, n) {
       return;
     }
     sesion.huboError = true;
-    if (err instanceof McpToolError || err instanceof UsageError) {
-      console.log(`\n  ✗ ${err.message}`);
-    } else if (err instanceof McpTransportError) {
-      console.log(`\n  ✗ transporte: ${err.message}`);
-    } else {
-      throw err; // un bug de programación sí debe salir a la superficie
-    }
+    console.log("");
+    imprimirError(err);
     console.log("  (revisá la API key o el endpoint en 0. Configuración)");
     return;
   }
@@ -441,7 +465,7 @@ async function correrItemMcp(rl, sesion, n) {
     flags.yes = true;
   }
 
-  await ejecutar(sesion, commandName, flags);
+  await ejecutar(sesion, commandName, flags, { kbId });
 }
 
 /** `tools` no pasa por COMMANDS: es tools/list, no una herramienta. */
@@ -463,7 +487,7 @@ async function listarHerramientas(sesion) {
     console.log(`  ${pie(ms, 0, null, client)}`);
   } catch (err) {
     sesion.huboError = true;
-    console.log(`  ✗ ${err?.message ?? err}`);
+    imprimirError(err);
     console.log(`  ${RAYA}`);
     console.log(`  ${pie(performance.now() - t0, 0, null, client)}`);
   }
@@ -521,7 +545,7 @@ async function probarConexion(sesion) {
     // Sin esto, `menu-smoke.mjs 0 0.4` reportaba como sana una integración
     // caída: el chequeo de conexión fallaba y la corrida igual salía con 0.
     sesion.huboError = true;
-    console.log(`  ✗ ${err?.message ?? err}`);
+    imprimirError(err);
     console.log(`  ${RAYA}`);
     console.log(`  ${pie(performance.now() - t0, 0, null, client)}`);
   }
@@ -697,9 +721,12 @@ async function contextoApi(rl, sesion, necesita = "credencial") {
 
   // `health` va SIN credencial a propósito: es el primer diagnóstico, y que
   // falle ahí señala la URL y no la key.
+  // El token es el de la SESIÓN: el `--token` con que se abrió el menú, o el
+  // que se cambió en 0.1. Resolver con `{}` lo ignoraba, y el carril REST
+  // gastaba créditos con la key del .env mientras la cabecera mostraba otra.
   const requireToken = necesita !== "url";
   if (!sesion.api || sesion.api.conToken !== requireToken) {
-    const { apiUrl, token } = resolveApiConfig({}, { requireToken });
+    const { apiUrl, token } = resolveApiConfig({ token: sesion.token }, { requireToken });
     sesion.api = {
       conToken: requireToken,
       cfg: { apiUrl, token },
@@ -710,16 +737,22 @@ async function contextoApi(rl, sesion, necesita = "credencial") {
 }
 
 /** Corre algo del carril API mostrando el comando equivalente y los tiempos. */
-async function correrApi(ctx, { comando, flags = {}, necesitaYes = false }, fn) {
+async function correrApi(ctx, { comando, flags = {}, posicionales = [], necesitaYes = false }, fn) {
   // Invariante 1: el comando impreso reproduce la acción. Se arma con el mismo
-  // constructor que usa el CLI, así que no puede divergir.
-  console.log(`\n  $ ${buildCommandLine(`api ${comando}`, flags, { needsYes: necesitaYes })}\n`);
+  // constructor que usa el CLI, así que no puede divergir — los posicionales
+  // (el nombre de la petición, la pregunta) también pasan por él, y no por
+  // una interpolación a mano que dejaba una comilla sin cerrar ante un
+  // apóstrofo. Un valor con caracteres de control se declina, como en el CLI:
+  // un comando que no reproduce la acción es peor que ninguno.
+  const inseguro = posicionales.map(valorSeguroParaComando).find((v) => !v.seguro);
+  if (inseguro) console.log(`\n  (no imprimo el comando: un argumento ${inseguro.motivo})\n`);
+  else console.log(`\n  $ ${buildCommandLine(`api ${comando}`, flags, { needsYes: necesitaYes, posicionales })}\n`);
   const t0 = performance.now();
   try {
     await fn();
   } catch (err) {
     ctx.sesion.huboError = true;
-    console.error(`  ✗ ${err?.message ?? err}`);
+    imprimirError(err, console.error);
   }
   // Invariante 4: el wall-clock va separado de la latencia del servidor.
   console.log(`\n  ${formatMs(performance.now() - t0)} de reloj`);
@@ -737,20 +770,32 @@ async function pedirKbApi(ctx) {
   let kbs = [];
   try {
     const { data } = await ctx.client.request("GET", "/knowledge-bases");
-    kbs = data?.knowledgeBases ?? data?.data ?? (Array.isArray(data) ? data : []);
+    kbs = kbsDeRespuesta(data);
   } catch (err) {
     console.error(`  (no pude listar las KBs: ${err?.message ?? err})`);
   }
+  // La lista queda a mano para que `resolverKbApi` no vuelva a pedirla.
+  ctx.kbs = kbs;
   if (!kbs.length) return (await ctx.rl.question("   knowledge base (slug o id): ")).trim();
 
   console.log("");
   kbs.forEach((kb, i) => console.log(`   ${String(i + 1).padStart(2)}. ${kb.name ?? kb.slug ?? kb.id}`));
   const op = (await ctx.rl.question("\n   > ")).trim();
   const n = Number(op);
+  // El slug es lo que se imprime; el id se resuelve al mandar. Los handlers
+  // de `/agent/*` resuelven `knowledgeBaseId` SOLO por id, así que mandar el
+  // slug —que es lo que este selector daba— contestaba 404 en cada acción.
   if (Number.isInteger(n) && n >= 1 && n <= kbs.length) return kbs[n - 1].slug ?? kbs[n - 1].id;
   // Lo tipeado vale como slug: no obligar a elegir de la lista es lo que deja
   // usar una KB que la key ve pero el listado paginó fuera.
   return op;
+}
+
+/** UUID o slug → UUID, usando la lista que el selector ya trajo si la hay. */
+async function resolverKbApi(ctx, raw) {
+  if (esUuid(raw)) return raw;
+  const hit = ctx.kbs ? buscarKb(ctx.kbs, raw) : null;
+  return hit ? hit.id : resolveKbIdApi(ctx.client, raw);
 }
 
 async function itemHealth(ctx) {
@@ -787,9 +832,13 @@ async function itemRun(ctx) {
   const confirmar = necesitaConfirmacion(entrada);
   if (confirmar && !(await confirmarEfecto(ctx.rl, `"${entrada.nombre}" ${efectosDe(entrada)}`))) return;
 
-  const flags = Object.fromEntries(Object.entries(vars).map(([k, v]) => [`var ${k}`, v]));
-  await correrApi(ctx, { comando: `run '${entrada.nombre}'`, flags, necesitaYes: confirmar }, async () => {
-    const p = resolverPeticion(entrada, vars, coleccion);
+  // `--var k=v` repetido: la forma que el parser del CLI acumula. Una clave
+  // con espacio (`var kbId`) armaba `--var kbId abc`, que no parsea.
+  const flags = { var: Object.entries(vars).map(([k, v]) => `${k}=${v}`) };
+  await correrApi(ctx, { comando: "run", posicionales: [entrada.nombre], flags, necesitaYes: confirmar }, async () => {
+    const resueltas = { ...vars };
+    if (resueltas.kbId !== undefined) resueltas.kbId = await resolverKbApi(ctx, resueltas.kbId);
+    const p = resolverPeticion(entrada, resueltas, coleccion);
     const { status, data } = await ctx.client.request(p.metodo, p.ruta, { body: p.body, headers: p.cabeceras, auth: p.auth });
     printPretty(data);
     console.log(`\n  ${status} · ${p.metodo} ${p.ruta}`);
@@ -814,15 +863,19 @@ async function itemAgente(ctx, nombre) {
   }
 
   await correrApi(ctx, { comando: nombre, flags, necesitaYes: confirmar }, async () => {
-    const body = spec.build(flags, { celda: ctx.cfg.apiUrl });
-    const ruta = typeof spec.ruta === "function" ? spec.ruta(flags) : spec.ruta;
+    // Dos pasadas, como en el CLI: la primera valida lo tipeado antes de salir
+    // a la red; la segunda arma el cuerpo con la KB ya resuelta a UUID.
+    spec.build(flags, { celda: ctx.cfg.apiUrl });
+    const resueltos = await resolverKbsDeFlags(flags, (raw) => resolverKbApi(ctx, raw));
+    const body = spec.build(resueltos, { celda: ctx.cfg.apiUrl });
+    const ruta = typeof spec.ruta === "function" ? spec.ruta(resueltos) : spec.ruta;
     const cabeceras = {};
     if (spec.idempotencia && body !== undefined) cabeceras["x-idempotency-key"] = claveIdempotencia(spec.idempotencia, body);
     const { status, data } = await ctx.client.request(spec.metodo, ruta, { body, headers: cabeceras });
     printPretty(data);
     console.log(`\n  ${status} · ${spec.metodo} ${ruta}`);
     if (spec.captura === "retrievalId" && data?.retrievalId) {
-      recordarRetrieval({ id: data.retrievalId, kb: String(flags.kb), celda: ctx.cfg.apiUrl });
+      recordarRetrieval({ id: data.retrievalId, kb: String(flags.kb), kbId: resueltos.kb, celda: ctx.cfg.apiUrl });
       console.log(`  retrievalId recordado por ${RETRIEVAL_TTL_MS / 60000} min`);
     }
   });
@@ -835,14 +888,15 @@ async function itemLoop(ctx, { generar }) {
   const flags = { kb, ...(generar ? {} : { "no-generate": true }) };
   if (!(await confirmarEfecto(ctx.rl, "el bucle recupera, y eso gasta créditos de IA"))) return;
 
-  await correrApi(ctx, { comando: `loop '${pregunta}'`, flags }, async () => {
+  await correrApi(ctx, { comando: "loop", posicionales: [pregunta], flags }, async () => {
     const llm = generar ? resolveLlmConfig({}) : null;
+    const kbId = await resolverKbApi(ctx, kb);
     const traza = [];
     await correrBucle({
       client: ctx.client,
       traza,
       pregunta,
-      kb,
+      kb: kbId,
       opciones: { umbral: MAX_SEND_RISK, generarRespuesta: generar, gestionado: false, llm, onDebug: ctx.sesion.onDebug },
       onPaso: (paso) => {
         if (paso.paso !== "decidir") console.log(`  ${narrar(paso, { mostrarRespuesta: true })}`);
@@ -863,16 +917,15 @@ async function itemDoctor(ctx) {
 }
 
 async function itemCollection(ctx, refresh) {
-  const { values: dotenv } = loadDotenv();
-  const url = process.env[COLLECTION_URL_KEY] ?? dotenv[COLLECTION_URL_KEY];
-  if (!url) throw new UsageError(`Falta ${COLLECTION_URL_KEY}: la URL de lectura de la colección publicada.`);
+  const url = resolveCollectionUrl();
 
   await correrApi(ctx, { comando: "collection", flags: refresh ? { refresh: true } : { check: true } }, async () => {
     const publicada = await traerPublicada(url);
-    const destino = refresh ? guardarCache(publicada) : join(tmpdir(), `sq-test-menu-${process.pid}.json`);
-    const remoto = catalogoDe(publicada, destino);
+    // Armar el catálogo es lo que valida; se guarda DESPUÉS, para que una
+    // colección remota rota no quede en la caché.
+    const remoto = catalogoDe(publicada);
     const derivas = comparar(cargarCatalogo(), remoto);
-    if (!refresh) rmSync(destino, { force: true });
+    if (refresh) console.log(`  Caché en ${guardarCache(publicada)}\n`);
     for (const linea of formatearDerivas(derivas)) console.log(`  ${linea}`);
     if (derivas.length) ctx.sesion.huboError = true;
   });
@@ -923,6 +976,6 @@ async function correrItemApi(rl, sesion, item) {
   } catch (err) {
     if (err instanceof CancelarAccion) return console.log("   cancelado.");
     sesion.huboError = true;
-    console.error(`  ✗ ${err?.message ?? err}`);
+    imprimirError(err, console.error);
   }
 }

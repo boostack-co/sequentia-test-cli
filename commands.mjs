@@ -122,35 +122,73 @@ export function envFileCandidates() {
   return [...new Set(files)];
 }
 
-/** @returns {{values: object, files: string[]}} claves fusionadas y de dónde salieron. */
+/**
+ * @returns {{values: object, files: string[]}} claves fusionadas y de dónde salieron.
+ *
+ * Una clave PRESENTE PERO VACÍA (`SQ_TEST_API_URL=`) no pisa el valor de un
+ * archivo de menor prioridad. Sin esto, copiar `.env.example` al directorio de
+ * trabajo y llenar solo el token dejaba la URL en `""`, tapando la que estaba
+ * en `~/.config/sq-test/.env` — y el comando decía "falta la URL" con la URL
+ * puesta. La plantilla emite las claves vacías a propósito, para que se vea
+ * cuáles existen; que estén vacías no puede significar "borrá la del usuario".
+ */
 export function loadDotenv() {
   const values = {};
   const files = [];
   for (const f of envFileCandidates()) {
     if (!existsSync(f)) continue;
-    Object.assign(values, parseEnvFile(f));
+    for (const [k, v] of Object.entries(parseEnvFile(f))) if (v !== "") values[k] = v;
     files.push(f);
   }
   return { values, files };
 }
 
+/**
+ * La config leída UNA vez, con la precedencia resuelta: variable de proceso >
+ * `.env` (fusionados). `envFiles` es para decir de dónde salió lo que se leyó.
+ * Es el único lugar donde vive esa regla: antes había cinco copias.
+ */
+export function leerConfig() {
+  const { values, files } = loadDotenv();
+  return { pick: (key) => process.env[key] ?? values[key], envFiles: files };
+}
+
+/** El mensaje de "falta la API key", igual para los dos carriles. */
+function faltaApiKey(envFiles) {
+  return new UsageError(
+    "Falta la API key.\n" +
+      `  Corré  sq-test init  para crear ${USER_ENV_FILE}, y poné ahí ${TOKEN_KEY}.\n` +
+      `  También sirve exportar ${TOKEN_KEY} como variable de entorno, o pasar --token.` +
+      (envFiles.length ? `\n  Config leída de: ${envFiles.join(", ")}` : "\n  (no se encontró ningún .env)"),
+  );
+}
+
 /** Precedencia: flag > variable de proceso > .env (fusionados) > default. */
 export function resolveConfig(flags = {}) {
-  const { values: dotenv, files: envFiles } = loadDotenv();
-  const pick = (key) => process.env[key] ?? dotenv[key];
+  const { pick, envFiles } = leerConfig();
 
   const url = flags.url ?? pick(URL_KEY) ?? DEFAULT_URL;
   const token = flags.token ?? pick(TOKEN_KEY);
 
-  if (!token) {
-    throw new UsageError(
-      "Falta la API key.\n" +
-        `  Corré  sq-test init  para crear ${USER_ENV_FILE}, y poné ahí ${TOKEN_KEY}.\n` +
-        `  También sirve exportar ${TOKEN_KEY} como variable de entorno, o pasar --token.` +
-        (envFiles.length ? `\n  Config leída de: ${envFiles.join(", ")}` : "\n  (no se encontró ningún .env)"),
-    );
-  }
+  if (!token) throw faltaApiKey(envFiles);
   return { url, token, envFiles };
+}
+
+/**
+ * La URL de lectura de la colección publicada, o el error que dice cómo
+ * conseguirla. Lo usan el CLI y el menú: antes cada uno tenía su copia, y la
+ * del menú era un renglón que no decía ni la forma de la URL ni dónde leer.
+ */
+export function resolveCollectionUrl() {
+  const url = leerConfig().pick(COLLECTION_URL_KEY);
+  if (url) return url;
+  throw new UsageError(
+    `Falta ${COLLECTION_URL_KEY}: la URL de lectura de la colección publicada.\n` +
+      "  Es la de la API de Postman con su access key, algo con la forma\n" +
+      "  https://api.postman.com/collections/<uid>?access_key=<key>\n" +
+      "  Mientras la colección no esté publicada, este comando no tiene con qué contrastar.\n" +
+      "  Ver collection/PUBLISHING.md.",
+  );
 }
 
 /**
@@ -163,8 +201,7 @@ export function resolveConfig(flags = {}) {
  *   justamente lo que lo vuelve el primer diagnóstico: si falla, es la URL.
  */
 export function resolveApiConfig(flags = {}, { requireToken = true } = {}) {
-  const { values: dotenv, files: envFiles } = loadDotenv();
-  const pick = (key) => process.env[key] ?? dotenv[key];
+  const { pick, envFiles } = leerConfig();
 
   const raw = flags["api-url"] ?? pick(API_URL_KEY);
   if (!raw) {
@@ -188,14 +225,7 @@ export function resolveApiConfig(flags = {}, { requireToken = true } = {}) {
   }
 
   const token = flags.token ?? pick(TOKEN_KEY) ?? null;
-  if (requireToken && !token) {
-    throw new UsageError(
-      "Falta la API key.\n" +
-        `  Corré  sq-test init  para crear ${USER_ENV_FILE}, y poné ahí ${TOKEN_KEY}.\n` +
-        `  También sirve exportar ${TOKEN_KEY} como variable de entorno, o pasar --token.` +
-        (envFiles.length ? `\n  Config leída de: ${envFiles.join(", ")}` : "\n  (no se encontró ningún .env)"),
-    );
-  }
+  if (requireToken && !token) throw faltaApiKey(envFiles);
   return { apiUrl, token, envFiles };
 }
 
@@ -276,21 +306,75 @@ export function put(target, key, value) {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** ¿Tiene forma de UUID? Lo que no la tiene se trata como slug o nombre. */
+export const esUuid = (valor) => UUID_RE.test(String(valor ?? ""));
+
 /** KB ficticia para la pasada de validación previa a resolver el slug. Nunca se envía. */
 export const PLACEHOLDER_KB_ID = "00000000-0000-0000-0000-000000000000";
 
+/** La KB de una lista cuyo slug o nombre coincide, sin distinguir mayúsculas. */
+export function buscarKb(kbs, raw) {
+  const needle = String(raw).toLowerCase();
+  return kbs.find((kb) => kb.slug?.toLowerCase() === needle || kb.name?.toLowerCase() === needle) ?? null;
+}
+
+function kbNoEncontrada(kbs, raw) {
+  const names = kbs.map((kb) => kb.slug ?? kb.name).join(", ") || "(ninguna)";
+  return new UsageError(`No encontré la KB "${raw}". Disponibles: ${names}`);
+}
+
 /** Acepta UUID o slug/nombre: si no es UUID, lo resuelve por list_knowledge_bases. */
 export async function resolveKbId(client, raw) {
-  if (UUID_RE.test(raw)) return raw;
+  if (esUuid(raw)) return raw;
   const { data } = await client.call("list_knowledge_bases", {});
   const kbs = Array.isArray(data) ? data : [];
-  const needle = raw.toLowerCase();
-  const hit = kbs.find((kb) => kb.slug?.toLowerCase() === needle || kb.name?.toLowerCase() === needle);
-  if (!hit) {
-    const names = kbs.map((kb) => kb.slug ?? kb.name).join(", ") || "(ninguna)";
-    throw new UsageError(`No encontré la KB "${raw}". Disponibles: ${names}`);
-  }
+  const hit = buscarKb(kbs, raw);
+  if (!hit) throw kbNoEncontrada(kbs, raw);
   return hit.id;
+}
+
+/** La lista de KBs que devuelve `GET /knowledge-bases`, en cualquiera de sus sobres. */
+export function kbsDeRespuesta(data) {
+  return data?.knowledgeBases ?? data?.data ?? (Array.isArray(data) ? data : []);
+}
+
+/**
+ * Lo mismo que `resolveKbId`, para el carril REST.
+ *
+ * Los handlers de `/api/v1/agent/*` resuelven `knowledgeBaseId` SOLO por id
+ * (no hay fallback por slug del lado del servidor), así que un slug —que es lo
+ * que el selector del menú y los ejemplos del README dan— contestaba `404
+ * Knowledge base not found` en cada llamada. El MCP ya resolvía slugs; el REST
+ * no, y la diferencia se veía como un 404 inexplicable.
+ */
+export async function resolveKbIdApi(client, raw) {
+  if (esUuid(raw)) return raw;
+  const { data } = await client.request("GET", "/knowledge-bases");
+  const kbs = kbsDeRespuesta(data);
+  const hit = buscarKb(kbs, raw);
+  if (!hit) throw kbNoEncontrada(kbs, raw);
+  return hit.id;
+}
+
+/**
+ * Los flags con `kb` (y `kbs`, la lista de `api query`) ya resueltos a UUID.
+ * Devuelve una COPIA: los flags originales son los que se imprimen, y el
+ * comando impreso conserva el slug para que sea legible.
+ *
+ * @param {(raw: string) => Promise<string>} resolver
+ */
+export async function resolverKbsDeFlags(flags, resolver) {
+  const salida = { ...flags };
+  if (flags.kb !== undefined && flags.kb !== "") salida.kb = await resolver(String(flags.kb));
+  if (flags.kbs !== undefined && flags.kbs !== "") {
+    const ids = [];
+    for (const item of String(flags.kbs).split(",")) {
+      const s = item.trim();
+      if (s) ids.push(await resolver(s));
+    }
+    salida.kbs = ids.join(",");
+  }
+  return salida;
 }
 
 // ---------------------------------------------------------------------------
@@ -688,20 +772,31 @@ export function invocationPrefix() {
  *
  * Nunca incluye `--token`: el comando se muestra en pantalla y se copia.
  *
+ * Un valor que es un array se emite repitiendo la opción (`--var a=1 --var
+ * b=2`), que es la forma que el parser acumula. El menú armaba `--var kbId abc`
+ * con una clave con espacio, y ese comando —anunciado como reproducible— no
+ * parseaba.
+ *
  * @param {object} [opts]
  * @param {boolean} [opts.needsYes] agrega `--yes` para las herramientas con efectos
  * @param {string} [opts.url] endpoint activo; se emite como `--url` solo si NO es
  *   el default. Omitirlo hacía que un comando ejecutado contra un endpoint
  *   propio, al pegarlo en otra terminal, pegara en el de Sequentia.
+ * @param {string[]} [opts.posicionales] argumentos posicionales (el nombre de
+ *   la petición de `api run`, la pregunta de `api loop`), citados como cualquier
+ *   valor. Interpolarlos a mano con comillas simples dejaba una comilla sin
+ *   cerrar en cuanto la pregunta traía un apóstrofo.
  */
-export function buildCommandLine(commandName, flags = {}, { needsYes = false, url } = {}) {
+export function buildCommandLine(commandName, flags = {}, { needsYes = false, url, posicionales = [] } = {}) {
   const parts = invocationPrefix().split(" ");
   if (url && url !== DEFAULT_URL) emitOption(parts, "url", url);
   parts.push(commandName);
+  for (const p of posicionales) parts.push(quoteArg(p));
 
   for (const [key, value] of Object.entries(flags)) {
     if (value === undefined || value === "" || key === "token" || key === "url") continue;
     if (value === true) parts.push(`--${key}`);
+    else if (Array.isArray(value)) for (const v of value) emitOption(parts, key, v);
     else if (value !== false) emitOption(parts, key, value);
   }
   if (needsYes && !flags.yes) parts.push("--yes");
