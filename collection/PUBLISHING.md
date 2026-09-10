@@ -28,6 +28,15 @@ Necesita una cuenta con permiso de escritura sobre el workspace público. Se hac
 1. En el workspace público, abrir la colección existente e **importar el JSON encima** (*Import → Files → Replace*). No crear una colección nueva: cambiaría el id y rompería todos los enlaces publicados.
 2. Importar también el entorno si cambió.
 3. Comprobar que la colección publicada sigue teniendo su enlace de lectura activo.
+4. **Correr `api collection --check`.** Un cambio no está entregado hasta este paso: los tres anteriores dejan el repo correcto y a los clientes mirando lo viejo.
+
+### Tres cosas que pasan de verdad al publicar
+
+Ninguna es teórica: las tres ocurrieron en la primera publicación, y las tres se ven igual —«hice lo que decía el paso 1 y no pasó nada»—.
+
+- **El import puede crear una colección PARALELA en vez de reemplazar.** El síntoma es dos entradas con el mismo nombre en la barra lateral. Si pasa, la que conserva el `uid` publicado es la vieja, así que el enlace que la gente tiene sigue apuntando a la desactualizada.
+- **La interfaz puede ir varios minutos por detrás de la nube.** Un borrado se ve aplicado, refrescás, y vuelve. No es que no se guarde: tarda. Durante esa ventana la pantalla muestra un estado que no existe.
+- **Por las dos anteriores, la pantalla no sirve para dar por buena una publicación.** La API sí, y es la que lee `--check`. Si hay duda, `api collection --check` responde; mirar la barra lateral, no.
 
 ### Qué se registra en el repo y qué no
 
@@ -59,7 +68,7 @@ Es el control de gobierno de todo esto: es lo único que distingue «la colecci�
 
 **Lo único que se rompe es `--check`.** El CLI sigue andando con la colección que trae empaquetada, y los clientes siguen viendo la colección publicada. Eso es a propósito, y es la razón por la que el original vive acá: nada crítico depende de una credencial de un tercero que puede caducar.
 
-Para arreglarlo: generar una clave de lectura nueva, actualizar la URL de arriba y el default del CLI, en un PR.
+Para arreglarlo: generar una clave de lectura nueva y ponerla en tu `SQ_TEST_COLLECTION_URL`. No hay nada que actualizar en el repo — la key no vive acá, justamente para que rotarla no sea un cambio de código.
 
 ## Agregar una petición
 

@@ -15,8 +15,8 @@ Es el mismo artefacto que usa el CLI de este repo como **catálogo ejecutable**,
 
 | Variable | Qué va dentro |
 | :--- | :--- |
-| `baseUrl` | El origen **directo de tu celda**, algo como `https://f1-t1-g01-c001.sequentia.co`. Sin barra final y **sin `/api/v1`**: cada petición ya lleva la ruta completa. No es el host del servidor MCP, que suele ser otro. |
-| `apiKey` | Una key `sk_live_…`. Está tipada como *secret*, lo que **la enmascara en la interfaz y nada más**: un valor guardado como *shared* o *initial* puede salir en una exportación del entorno. Guardala como valor *current*, o en Postman Vault. |
+| `baseUrl` | El origen **directo de tu celda**, algo como `https://tu-celda.example`. Sin barra final y **sin `/api/v1`**: cada petición ya lleva la ruta completa. No es el host del servidor MCP, que suele ser otro. |
+| `apiKey` | Una key `sk_live_…`. Está tipada como *secret*, lo que **la enmascara en la interfaz y nada más**. Guardala como valor **current**, o en Postman Vault — **nunca como *initial***. El *initial* se sincroniza con el workspace, así que en un workspace **público** se publica: es la forma más fácil de regalar una credencial sin darse cuenta. Un valor *shared* o *initial* también sale en cualquier exportación del entorno. |
 | `kbId` | Corré *Knowledge Bases → List knowledge bases* y copiá un `id`. La consola te imprime el primero. |
 
 El default de `baseUrl` es **inalcanzable a propósito** (`.invalid`, reservado por RFC 2606). La razón no es cosmética: un default que resolviera es uno que alguien puede dejar puesto mientras su key `sk_live_…` viaja hacia él como bearer token en cada petición.
@@ -101,7 +101,11 @@ Los diez minutos son política de esta colección, no del servidor.
 
 ## Estado de verificación
 
-**Esta colección todavía no se corrió contra una celda real.** Fija las formas de los cuerpos y las rutas según la superficie pública documentada, no que el servidor conteste lo que se espera. Correrla de verdad —a mano, o con el CLI de este repo— es lo que la convierte en algo verificado; hasta entonces, tratala como una guía bien informada.
+**Corrida contra una celda real.** Las 19 peticiones se ejecutaron con el CLI de este repo: **13 devolvieron `200`**, los seis endpoints del carril agéntico incluidos. Las 6 restantes fallaron con `403` por scopes que la credencial de prueba no tenía —`analytics.read` y `gaps.read`—, o sea por permisos y no por la forma de la petición.
+
+Correrla es lo que la separa de una guía bien informada, y valió la pena: **una petición se publicaba contra una ruta que no existe**. La ruta devolvía `401`, que en este servidor es lo que responde *cualquier* path desconocido bajo `/api/v1/` —el middleware de auth corre antes del handler de 404—, así que el síntoma mandaba a revisar la API key en vez de la URL. Se quitó de la colección.
+
+Una colección fija las formas de los cuerpos y las rutas; que el servidor conteste lo que dicen es otra afirmación, y solo se comprueba corriéndola.
 
 ## Cómo se mantiene
 
