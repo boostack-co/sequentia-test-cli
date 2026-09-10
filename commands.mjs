@@ -171,7 +171,7 @@ export function resolveApiConfig(flags = {}, { requireToken = true } = {}) {
     throw new UsageError(
       "Falta la URL de la celda para el carril API.\n" +
         `  Poné ${API_URL_KEY} en ${USER_ENV_FILE}, exportala, o pasá --api-url.\n` +
-        "  Es el origen DIRECTO de tu celda (algo como https://f1-t1-g01-c001.sequentia.co),\n" +
+        "  Es el origen DIRECTO de tu celda (algo como https://tu-celda.example),\n" +
         "  sin barra final y sin /api/v1: cada ruta ya lo agrega.\n" +
         `  No es el endpoint MCP (${URL_KEY}), que suele ser otro host.` +
         (envFiles.length ? `\n  Config leída de: ${envFiles.join(", ")}` : "\n  (no se encontró ningún .env)"),
