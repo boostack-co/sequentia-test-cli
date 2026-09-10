@@ -35,6 +35,8 @@ Agrega el **carril agéntico de la API REST** (`/api/v1`) junto al de MCP, que s
 - **Y antes de eso, ahora dice si hace falta conseguirlo.** La colección declara los scopes de cada petición en OR, así que el informe cruza lo que falta contra lo confirmado: `agent.retrieve` sin sondear con `rag.query` confirmado sale como «pero rag.query abre esas peticiones igual: no hace falta». Las alternativas se derivan del catálogo empaquetado, no de una tabla escrita a mano que volvería a envejecer.
 - **Un `403` sobre una petición que acepta dos scopes decía «falta alguno de».** Con semántica OR eso se lee al revés de lo que significa: no falta *alguno*, hace falta **uno**. Ahora lo dice así.
 
+- **Un `402` de plan sin `code` se leía como workspace cerrado.** `api-client.mjs` reconocía el 402 del módulo agéntico por `code` **o** por el texto del cuerpo; `doctor.mjs` solo por `code`. Las dos lecturas habían divergido, así que el mismo `402` mandaba a mirar el plan por un lado y a hablar con administración por el otro — y la clase es lo que elige el remedio que el informe recomienda. Encontrado al escribir la primera prueba que `clasificar()` tuvo en su vida.
+
 ### Notas para quien actualiza
 
 - **`SQ_TEST_API_URL` no es el endpoint MCP.** Suele ser otro host: es el origen **directo** de tu celda, sin barra final y sin `/api/v1`.
