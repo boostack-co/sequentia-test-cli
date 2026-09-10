@@ -37,6 +37,8 @@ Agrega el **carril agéntico de la API REST** (`/api/v1`) junto al de MCP, que s
 
 - **Un `402` de plan sin `code` se leía como workspace cerrado.** `api-client.mjs` reconocía el 402 del módulo agéntico por `code` **o** por el texto del cuerpo; `doctor.mjs` solo por `code`. Las dos lecturas habían divergido, así que el mismo `402` mandaba a mirar el plan por un lado y a hablar con administración por el otro — y la clase es lo que elige el remedio que el informe recomienda. Encontrado al escribir la primera prueba que `clasificar()` tuvo en su vida.
 
+- **La colección quedó publicada** en un workspace público de Postman. `collection/PUBLISHING.md` registra el workspace y el id; la *access key* de lectura **no** va al repo (GitHub la bloquea por push protection y un token en repo público se rota tarde o temprano), así que `SQ_TEST_COLLECTION_URL` sigue sin default y cada quien pone la suya.
+
 ### Notas para quien actualiza
 
 - **`SQ_TEST_API_URL` no es el endpoint MCP.** Suele ser otro host: es el origen **directo** de tu celda, sin barra final y sin `/api/v1`.

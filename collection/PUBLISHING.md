@@ -35,14 +35,19 @@ Necesita una cuenta con permiso de escritura sobre el workspace público. Se hac
 | :--- | :--- |
 | El id de la colección publicada | **Sí** — abajo |
 | El workspace público donde vive | **Sí** — abajo |
-| La URL de lectura con su *access key* | **Sí**. Es de solo lectura y de una sola colección, así que es publicable. Hoy `SQ_TEST_COLLECTION_URL` **no tiene default**, porque no hay nada publicado todavía; el día de la primera publicación, ponerla como default en `commands.mjs` es parte de ese PR |
+| La URL de lectura **sin** la access key | **Sí** — abajo, con `<tu access key>` de marcador |
+| La *access key* en sí | **No.** GitHub la bloquea por push protection, y un token en un repo público es algo que alguien rota algún día. Va en `SQ_TEST_COLLECTION_URL` de cada uno; `SQ_TEST_COLLECTION_URL` **no tiene default** |
 | **La API key de Postman de quien publica** | **No, nunca.** El job `secretos` del CI la rechazaría, y con razón |
 
 <!-- Se completan al publicar por primera vez. -->
 
-- **Workspace público:** _(pendiente de la primera publicación)_
-- **Id de la colección:** _(pendiente)_
-- **URL de lectura:** _(pendiente)_
+- **Workspace público:** <https://www.postman.com/egonzalez-834a9dbf-7945626/sequentia-api>
+- **Id de la colección:** `58130706-ee15e4c9-8eaa-4b98-b0fa-9ffa48ed3d73`
+- **URL de lectura:** `https://api.postman.com/collections/58130706-ee15e4c9-8eaa-4b98-b0fa-9ffa48ed3d73?access_key=<tu access key>`
+
+**La access key NO está acá, y es un cambio respecto de lo que este documento decía.** Se razonó que era publicable —es de solo lectura y de una sola colección— y en abstracto lo es, pero **GitHub la bloquea**: push protection la detecta por nombre («Postman Collection Key») y rechaza el push. Se puede desbloquear a mano, y aun así no vale la pena: un token en un repo público es algo que alguien va a rotar algún día, y ese día `--check` se rompe sin que nadie lo haya tocado. Cada quien pone la suya en `SQ_TEST_COLLECTION_URL`.
+
+**El endpoint anónimo no sirve como reemplazo, aunque parezca que sí.** `https://www.postman.com/collections/<uid>` devuelve la colección sin credencial —el workspace es público—, pero **degrada el schema a v2.0.0**: las URL vuelven como cadena en vez del objeto `{raw, host, path}` de v2.1.0. La primera consecuencia es que `assertHostEsVariable` la rechaza; la de fondo es que comparar dos schemas distintos produciría derivas falsas. Comprobado, no deducido.
 
 ## No se edita en Postman
 

@@ -57,13 +57,19 @@ export const API_URL_KEY = "SQ_TEST_API_URL";
 /**
  * La URL de lectura de la colección publicada, con su access key.
  *
- * Tampoco tiene default, y por ahora es porque **la colección todavía no está
- * publicada**: el día que lo esté, un maintainer pone acá la URL del workspace
- * público y este comando anda sin configurar nada. Ver `collection/PUBLISHING.md`.
+ * Tampoco tiene default, y ya no es porque falte publicar: la colección está
+ * publicada. Es que la URL de lectura lleva una access key, y **GitHub bloquea
+ * el push** de un repo que la contenga — push protection la detecta por nombre.
+ * Se puede desbloquear a mano, pero un token en un repo público es algo que
+ * alguien rota algún día, y ese día `--check` se rompe sin que nadie lo haya
+ * tocado. El workspace y el id sí están en `collection/PUBLISHING.md`.
  *
- * La access key es de solo lectura y de una sola colección, así que es
- * publicable. La API key de Postman de quien publica NO: no entra al repo, y el
- * job `secretos` del CI la rechazaría.
+ * El endpoint anónimo (`www.postman.com/collections/<uid>`) tampoco sirve de
+ * default aunque el workspace sea público: degrada el schema a v2.0.0 y la
+ * comparación quedaría contrastando dos formatos distintos.
+ *
+ * La API key de Postman de quien publica no entra al repo bajo ninguna forma, y
+ * el job `secretos` del CI la rechazaría.
  */
 export const COLLECTION_URL_KEY = "SQ_TEST_COLLECTION_URL";
 

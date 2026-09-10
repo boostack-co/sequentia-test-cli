@@ -363,6 +363,8 @@ Cada petición lleva en su descripción un bloque `sq-test` legible por máquina
 
 **El original vive acá y lo de Postman es una copia.** `api collection --check` es lo que hace cumplir esa regla: trae la publicada y reporta la deriva **en los dos sentidos** — lo que está acá y no allá (falta republicar) y lo que está allá y no acá (alguien editó en la interfaz de Postman). Sale con `1` si hay deriva, así que puede romper un pipeline.
 
+**La colección está publicada** en [este workspace público](https://www.postman.com/egonzalez-834a9dbf-7945626/sequentia-api). Para contrastar contra ella hace falta una *access key* de lectura propia en `SQ_TEST_COLLECTION_URL` — no viene por default a propósito: es un token, y un token en un repo público es algo que alguien rota algún día. Cómo se saca está en [`collection/PUBLISHING.md`](collection/PUBLISHING.md).
+
 ```bash
 node sq-test.mjs api collection --check      # necesita SQ_TEST_COLLECTION_URL
 node sq-test.mjs api collection --refresh    # además guarda lo traído en ~/.config/sq-test/
