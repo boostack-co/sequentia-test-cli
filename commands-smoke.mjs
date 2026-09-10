@@ -13,10 +13,10 @@
  *   node commands-smoke.mjs
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { ApiTransportError } from "./api-client.mjs";
 import { UsageError, buildCommandLine, buscarKb, esUuid, resolveKbIdApi, resolverKbsDeFlags } from "./commands.mjs";
 import { EXIT_TOOL_ERROR, EXIT_TRANSPORT, EXIT_USAGE, describirError } from "./errores.mjs";
@@ -50,13 +50,14 @@ const comprobar = async (titulo, calcular, esperado) => {
 const SANDBOX = mkdtempSync(join(tmpdir(), "sq-test-commands-smoke-"));
 const USUARIO = join(SANDBOX, ".config", "sq-test");
 const TRABAJO = join(SANDBOX, "trabajo");
-for (const d of [USUARIO, TRABAJO]) spawnSync("mkdir", ["-p", d]);
+for (const d of [USUARIO, TRABAJO]) mkdirSync(d, { recursive: true });
 writeFileSync(join(USUARIO, ".env"), "SQ_TEST_TOKEN=del-usuario\nSQ_TEST_API_URL=https://celda-del-usuario.invalid\n");
 writeFileSync(join(TRABAJO, ".env"), "SQ_TEST_TOKEN=del-proyecto\nSQ_TEST_API_URL=\n");
 
 const ENTORNO = { ...process.env, HOME: SANDBOX, USERPROFILE: SANDBOX };
 for (const k of Object.keys(ENTORNO)) if (k.startsWith("SQ_TEST_")) delete ENTORNO[k];
-const COMMANDS = fileURLToPath(new URL("./commands.mjs", import.meta.url));
+// Como URL `file://`, no como ruta: en Windows un `import "D:\\…"` es un esquema `d:` inválido.
+const COMMANDS = pathToFileURL(fileURLToPath(new URL("./commands.mjs", import.meta.url))).href;
 const enSandbox = (codigo) => {
   const r = spawnSync(process.execPath, ["--input-type=module", "-e", codigo], { cwd: TRABAJO, env: ENTORNO, encoding: "utf8" });
   if (r.status !== 0) throw new Error(r.stderr);
