@@ -36,21 +36,52 @@ Agrega el **carril agéntico de la API REST** (`/api/v1`) junto al de MCP, que s
 - **Un `403` sobre una petición que acepta dos scopes decía «falta alguno de».** Con semántica OR eso se lee al revés de lo que significa: no falta *alguno*, hace falta **uno**. Ahora lo dice así.
 
 - **Un `402` de plan sin `code` se leía como workspace cerrado.** `api-client.mjs` reconocía el 402 del módulo agéntico por `code` **o** por el texto del cuerpo; `doctor.mjs` solo por `code`. Las dos lecturas habían divergido, así que el mismo `402` mandaba a mirar el plan por un lado y a hablar con administración por el otro — y la clase es lo que elige el remedio que el informe recomienda. Encontrado al escribir la primera prueba que `clasificar()` tuvo en su vida.
+- **Y para que no vuelvan a divergir, ahora hay una sola lectura.** `api-client` clasifica una vez (`causaDe`) y deja la causa en `err.causa`; `doctor` la consume de ahí en vez de re-derivarla con regex sobre la prosa que el propio cliente compone.
+
+### Corregido en la revisión de código (#41)
+
+- **El carril REST mandaba el slug de la KB y el servidor solo entiende el UUID.** El selector del menú, los ejemplos del README y `api loop --kb <slug>` producían `404 Knowledge base not found` en cada llamada. Ahora `--kb`, `--kbs` y `--var kbId=` resuelven el slug contra `GET /knowledge-bases` —una petición que no gasta créditos— igual que el carril MCP lo hace contra `list_knowledge_bases`. El comando impreso conserva el slug.
+- **El carril REST del menú ignoraba `--token` y la clave cambiada en `0.1`.** Se resolvía con `resolveApiConfig({})`, así que el carril MCP usaba la key de la sesión y el REST gastaba créditos con la del `.env`, sin que nada lo dijera. Ahora los dos carriles usan el token de la sesión, y cambiarlo invalida el cliente REST cacheado.
+- **`api doctor` fijaba el veredicto de la credencial con un error transitorio.** Un 429 tras el reintento (o un 5xx, o un timeout) en **un** sondeo dejaba `Credencial: ? error` aunque los otros seis confirmaran sus scopes. Ahora ese sondeo queda «sin sondear» con un aviso, y la credencial sale `ok` si algo confirmó; si todo cae por transporte, el estado es `inconcluso` y no `sin-permisos`. Los sondeos van además por etapas de dependencia (tres viajes en vez de siete).
+- **Los comandos MCP aceptaban en silencio los booleanos del carril API.** `list-kbs --managed` o `query-kb … --show-evidence` llegaban a la red sin hacer nada, y el mensaje de opción desconocida los listaba como válidos. Se rechazan con 2, como cualquier otra opción que no se usa.
+- **Un `SQ_TEST_API_URL=` vacío en el `.env` del proyecto tapaba la URL del `.env` del usuario.** Los archivos se fusionan por prioridad y una clave presente pero vacía pisaba el valor real; era fácil de provocar copiando `.env.example` y llenando solo el token. Ahora solo cuentan los valores presentes.
+- **Dos comandos que el menú imprimía como reproducibles no parseaban.** `api run` emitía `--var kbId abc` (una clave con espacio) y `api loop` interpolaba la pregunta entre comillas simples a mano, así que un apóstrofo dejaba una comilla sin cerrar. Los dos pasan ahora por el mismo constructor que el resto, con `--var k=v` repetido y el posicional citado.
+- **`api collection --refresh` guardaba la colección remota antes de validarla**, y `--check` dejaba un temporal en `tmpdir` si la validación fallaba. Ahora el catálogo se arma en memoria —sin temporal— y la caché se escribe después de validar.
+- **Cerrar una sesión MCP contra un gateway colgado tardaba 30 s por sesión.** `close()` reintentaba el DELETE tres veces con diez segundos de timeout, en serie y también ante un fallo de transporte, aunque el único caso que justifica el reintento es el 400/404 del ruteo multi-réplica. Ahora reintenta solo ante ese caso y cierra las sesiones en paralelo.
+- **Un frame SSE `data: null` tumbaba la respuesta entera** con un TypeError crudo (exit 3 con stack), aunque el frame válido viniera en la línea siguiente.
+- **Los errores del carril API dentro del menú perdían el detalle de transporte.** Un 401 salía como `✗ mensaje`, sin la cabecera `WWW-Authenticate` ni el cuerpo que el CLI muestra para el mismo error; y las dos cadenas de `instanceof` del carril MCP discrepaban en qué hacer con un error desconocido. Ahora una sola función (`errores.mjs`) decide qué es cada error y qué se muestra, para el CLI y para el menú.
+- **`fetch failed` ya dice por qué.** Los cuatro sitios que hacían `fetch` imprimían el mensaje genérico de Node; ahora sale la causa (`ENOTFOUND`, `ECONNREFUSED`…), que es lo que distingue un host mal tipeado de un servidor apagado. Las cuatro copias de esa plomería —y la espera ante 429, que en el cliente MCP conservaba el idioma `Number(h) || 5` que el REST ya había corregido— viven en `http-comun.mjs`.
+- **`AGENT_COMMANDS` y la colección declaran lo mismo por duplicado y nada lo comprobaba.** La guarda de `--yes` lee de uno para `api <atajo>` y del otro para `api run`; `agent-smoke.mjs` afirma ahora que método, ruta, scopes, `persists` y `spendsCredits` coinciden.
+- **El selector de KB del menú MCP pedía `list_knowledge_bases` dos veces por acción**: una para dibujar la lista y otra para volver a mapear el slug que acababa de salir de ella.
 
 - **La colección quedó publicada** en un workspace público de Postman. `collection/PUBLISHING.md` registra el workspace y el id; la *access key* de lectura **no** va al repo (GitHub la bloquea por push protection y un token en repo público se rota tarde o temprano), así que `SQ_TEST_COLLECTION_URL` sigue sin default y cada quien pone la suya.
 
 ### Seguridad
 
-- **Se quitó un hostname de celda real de dos archivos que viajan en el paquete** (`collection/README.md` y el mensaje de error de `commands.mjs`). Este repo es público y sus ejemplos usan dominios reservados por RFC 2606; ese quedó de un copiado temprano. **No llegó a publicarse**: la `2.1.0` no lo contiene, y se corrigió antes de la `2.2.0`.
+- **Se quitó un hostname de celda real de dos archivos que viajan en el paquete** (`collection/README.md` y el mensaje de error de `commands.mjs`). Este repo es público y sus ejemplos usan dominios reservados por RFC 2606; ese quedó de un copiado temprano. **No llegó a npm**: la `2.1.0` no lo contiene, y se corrigió antes de la `2.2.0`. **Sí llegó a GitHub**: los commits que lo introdujeron están en la rama `dev` del repo público y el historial lo conserva; quitarlo del árbol no lo des-publica. Tratarlo como expuesto es decisión del mantenedor (ver #41).
+- **El job `secretos` del CI buscaba una sola forma de credencial** (`sk_live_…`), así que una access key de Postman (`access_key=…`, `PMAK-…`) o un host de celda pasaban en verde — y `PUBLISHING.md` afirmaba que el job los rechazaría. Ahora busca las tres clases.
 - **`collection/README.md` refuerza el aviso de la variable `apiKey`**: va como valor *current*, nunca *initial*. El *initial* se sincroniza con el workspace, así que en un workspace **público** se publica.
 
 ### Notas para quien actualiza
 
 - **`SQ_TEST_API_URL` no es el endpoint MCP.** Suele ser otro host: es el origen **directo** de tu celda, sin barra final y sin `/api/v1`.
-- **En el carril API, `--kb` y `--var kbId=` quieren el UUID**, no el slug. El carril MCP sí resuelve slugs contra `list_knowledge_bases`; el REST responde `404 Knowledge base not found`, que es la misma respuesta que da para una KB de otro workspace.
+- **En el carril API, `--kb`, `--kbs` y `--var kbId=` aceptan el UUID o el slug.** El servidor resuelve `knowledgeBaseId` solo por id y responde `404 Knowledge base not found` ante un slug — la misma respuesta que da para una KB de otro workspace—, así que el CLI resuelve el slug del lado del cliente antes de mandarlo.
+- **Si venís de `1.x` (`sq-mcp`)**: ver la entrada de `2.0.0` abajo. El nombre del paquete no cambió, así que `npm update -g sequentia-test-cli` cruza el cambio mayor sin avisar.
 
-## [2.1.0] y anteriores
+## [2.1.0]
 
-Sin entrada de changelog: este archivo empieza en 2.2.0. Las versiones `1.1.0`, `2.0.0` y `2.1.0` cubren el carril MCP y están publicadas en [npm](https://www.npmjs.com/package/sequentia-test-cli?activeTab=versions); el historial está en los commits.
+Sin entrada de changelog: el archivo empieza en 2.2.0 y las versiones anteriores están publicadas en [npm](https://www.npmjs.com/package/sequentia-test-cli?activeTab=versions); el historial está en los commits. El único cambio de esta versión que un usuario nota es que **`query-kb` sin `--mode` manda `fast` explícitamente** en vez de dejar que el servidor aplique `standard`: explorar es el uso normal y ahí la latencia importa más que la profundidad. Un script que no pasaba `--mode` obtiene respuestas más rápidas y menos profundas que antes.
+
+## [2.0.0]
+
+**Cambio mayor: el comando se renombró de `sq-mcp` a `sq-test`**, y con él todo lo que llevaba ese nombre. Se hizo sin capa de compatibilidad —el paquete tenía horas de publicado— y el paquete npm conserva su nombre, así que `npm update -g` lo instala sin avisar. Quien tenga `1.x`:
+
+- El binario es `sq-test`; `sq-mcp` desaparece del PATH.
+- La configuración del usuario pasa de `~/.config/sq-mcp/.env` a `~/.config/sq-test/.env`. El archivo viejo no se lee: copialo, o corré `sq-test init` y volvé a poner la key.
+- Las claves pasan de `SQ_MCP_TOKEN` / `SQ_MCP_URL` a `SQ_TEST_TOKEN` / `SQ_TEST_URL`, y las variables `SQ_MCP_ENV_FILE` / `SQ_MCP_CMD` a `SQ_TEST_ENV_FILE` / `SQ_TEST_CMD`. Las viejas se ignoran en silencio.
+
+## [1.1.0]
+
+Primera versión publicada: el carril MCP, con el menú y el CLI.
 
 [2.2.0]: https://github.com/boostack-co/sequentia-test-cli/compare/v2.1.0...HEAD
