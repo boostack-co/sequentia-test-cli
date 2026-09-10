@@ -15,7 +15,7 @@
  *
  *   node doctor-smoke.mjs
  */
-import { AUSENTE, CONFIRMADO, SIN_SONDEAR, comoConseguir, estadoDeScopes } from "./doctor.mjs";
+import { AUSENTE, CONFIRMADO, SIN_SONDEAR, PROCEDENCIA, alternativasDe, comoConseguir, estadoDeScopes } from "./doctor.mjs";
 import { cargarCatalogo } from "./catalog.mjs";
 
 const { entradas } = cargarCatalogo();
@@ -106,6 +106,70 @@ function comprobar(titulo, real, esperado) {
   const scopes = estadoDeScopes({ entradas, confirmados: new Set(), sondeos: [] });
   const mudos = Object.keys(scopes).filter((s) => !comoConseguir(s));
   comprobar("ningún scope se queda sin vía", mudos, []);
+}
+
+// --- 8. Un consejo tiene que poder ejecutarse -----------------------------
+// La versión anterior mandaba a "pedirlo por la vía interna", y esa vía no
+// existe. El daño de un consejo así no es que sea inútil: es que PARECE
+// ejecutable, así que manda a esperar una gestión en vez de a preguntar. Se
+// afirma por texto porque lo que se rompió fue exactamente el texto.
+{
+  const scopes = estadoDeScopes({ entradas, confirmados: new Set(), sondeos: [] });
+  const conViaInexistente = Object.keys(scopes).filter((s) => /vía interna/i.test(comoConseguir(s)));
+  comprobar("ningún scope manda a una vía que no existe", conViaInexistente, []);
+  comprobar(
+    "y el que no está en ningún formulario nombra la vía que sí existe",
+    /API de creación de keys/.test(PROCEDENCIA["gaps.read"]),
+    true,
+  );
+}
+
+// --- 9. Las alternativas salen del catálogo, no de una tabla a mano --------
+// La colección declara los scopes de cada petición en OR. Derivarlas del
+// catálogo es lo que hace que el dato no se desactualice: este repo es público
+// e independiente, y una tabla de provisioning escrita acá volvería a mentir en
+// cuanto la plataforma cambie — que es la historia del punto 8.
+{
+  const alt = alternativasDe(entradas);
+  comprobar("`/agent/retrieve` declara rag.query como alternativa", alt["agent.retrieve"], ["rag.query"]);
+  comprobar("y la relación es simétrica", alt["rag.query"].includes("agent.retrieve"), true);
+  comprobar("`/agent/gap-report` declara gaps.write", alt["agent.gap_report"], ["gaps.write"]);
+  // `agent.feedback` es el único endpoint agéntico SIN alternativa: el servidor
+  // no le declara fallback. Que no aparezca acá no es un olvido — es la razón
+  // por la que ese scope sí hay que conseguirlo.
+  comprobar("`/agent/feedback` no tiene alternativa, y por eso no figura", alt["agent.feedback"], undefined);
+}
+
+// --- 10. Un scope que otro ya cubre NO se manda a pedir --------------------
+// Es la pregunta que el informe dejaba sin responder: que un scope quede sin
+// sondear no significa que haga falta. Pedir un permiso innecesario cuesta una
+// gestión y no arregla nada.
+{
+  const cubierto = { "rag.query": { estado: CONFIRMADO } };
+  const alt = { "agent.retrieve": ["rag.query"] };
+  comprobar(
+    "con la alternativa confirmada, dice que no hace falta",
+    /no hace falta pedirlo/.test(comoConseguir("agent.retrieve", { alternativas: alt, scopes: cubierto })),
+    true,
+  );
+  // El control en la dirección contraria: si la alternativa NO está confirmada,
+  // no puede decir que no hace falta. Una guarda que tranquiliza de más es peor
+  // que la que no dice nada, porque manda a no pedir lo que sí se necesita.
+  const sinCubrir = { "rag.query": { estado: AUSENTE } };
+  comprobar(
+    "sin la alternativa confirmada, NO tranquiliza",
+    /no hace falta pedirlo/.test(comoConseguir("agent.retrieve", { alternativas: alt, scopes: sinCubrir })),
+    false,
+  );
+  comprobar(
+    "y tampoco cuando la alternativa quedó sin sondear",
+    /no hace falta pedirlo/.test(
+      comoConseguir("agent.retrieve", { alternativas: alt, scopes: { "rag.query": { estado: SIN_SONDEAR } } }),
+    ),
+    false,
+  );
+  // Llamarla sin contexto tiene que seguir andando: es la firma que ya existía.
+  comprobar("sin contexto sigue devolviendo una vía", Boolean(comoConseguir("agent.retrieve")), true);
 }
 
 console.log(fallos ? `\n${fallos} fallos` : "\nTodo en verde.");
