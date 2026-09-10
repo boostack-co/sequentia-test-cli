@@ -365,6 +365,8 @@ Cada petición lleva en su descripción un bloque `sq-test` legible por máquina
 
 **La colección está publicada** en [este workspace público](https://www.postman.com/egonzalez-834a9dbf-7945626/sequentia-api). Para contrastar contra ella hace falta una *access key* de lectura propia en `SQ_TEST_COLLECTION_URL` — no viene por default a propósito: es un token, y un token en un repo público es algo que alguien rota algún día. Cómo se saca está en [`collection/PUBLISHING.md`](collection/PUBLISHING.md).
 
+Compara contra **el checkout en el que estás parado**, no contra `main`: en una rama atrasada va a reportar deriva que no es real. Es lo correcto —contrasta lo que ESE árbol empaqueta— pero conviene saberlo antes de asustarse.
+
 ```bash
 node sq-test.mjs api collection --check      # necesita SQ_TEST_COLLECTION_URL
 node sq-test.mjs api collection --refresh    # además guarda lo traído en ~/.config/sq-test/

@@ -39,6 +39,11 @@ Agrega el **carril agéntico de la API REST** (`/api/v1`) junto al de MCP, que s
 
 - **La colección quedó publicada** en un workspace público de Postman. `collection/PUBLISHING.md` registra el workspace y el id; la *access key* de lectura **no** va al repo (GitHub la bloquea por push protection y un token en repo público se rota tarde o temprano), así que `SQ_TEST_COLLECTION_URL` sigue sin default y cada quien pone la suya.
 
+### Seguridad
+
+- **Se quitó un hostname de celda real de dos archivos que viajan en el paquete** (`collection/README.md` y el mensaje de error de `commands.mjs`). Este repo es público y sus ejemplos usan dominios reservados por RFC 2606; ese quedó de un copiado temprano. **No llegó a publicarse**: la `2.1.0` no lo contiene, y se corrigió antes de la `2.2.0`.
+- **`collection/README.md` refuerza el aviso de la variable `apiKey`**: va como valor *current*, nunca *initial*. El *initial* se sincroniza con el workspace, así que en un workspace **público** se publica.
+
 ### Notas para quien actualiza
 
 - **`SQ_TEST_API_URL` no es el endpoint MCP.** Suele ser otro host: es el origen **directo** de tu celda, sin barra final y sin `/api/v1`.
