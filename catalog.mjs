@@ -180,7 +180,7 @@ function entradaDe(nombre, item) {
 }
 
 /**
- * Carga el catálogo.
+ * Carga el catálogo desde un archivo.
  *
  * @param {string} [ruta] otra colección; por defecto, la empaquetada.
  * @returns {{ entradas: Map<string, object>, coleccion: object }}
@@ -195,7 +195,18 @@ export function cargarCatalogo(ruta = COLLECTION_FILE) {
   } catch (err) {
     throw new CatalogError(`La colección no es JSON válido: ${err.message}`);
   }
+  return catalogoDesde(coleccion);
+}
 
+/**
+ * Arma el catálogo desde una colección ya parseada. Es lo que usa
+ * `api collection --check` con lo que trae de Postman: antes se serializaba a
+ * un temporal para volver a leerlo, solo porque el cargador pedía una ruta.
+ */
+export function catalogoDesde(coleccion) {
+  if (!coleccion || typeof coleccion !== "object") {
+    throw new CatalogError("La colección no es un objeto JSON");
+  }
   const entradas = new Map();
   const recorrer = (items, prefijo) => {
     for (const it of items ?? []) {

@@ -80,8 +80,8 @@ function peticiones(coleccion) {
 const derivasDe = (remota) =>
   sirviendo(remota, async (url) => {
     const publicada = await traerPublicada(url);
-    const local = catalogoDe(original, join(SANDBOX, "local.json"));
-    const remoto = catalogoDe(publicada, join(SANDBOX, "remoto.json"));
+    const local = catalogoDe(original);
+    const remoto = catalogoDe(publicada);
     return comparar(local, remoto);
   });
 

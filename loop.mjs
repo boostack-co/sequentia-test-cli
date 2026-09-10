@@ -17,7 +17,7 @@
 // del carril agéntico. Repetirlo acá daría dos fuentes para el mismo número,
 // y la que quedara vieja dejaría pasar lo que el servidor rechaza.
 import { VERIFY_CLAIM_MAX } from "./agent.mjs";
-import { UsageError, loadDotenv } from "./commands.mjs";
+import { UsageError, leerConfig } from "./commands.mjs";
 import { describirFalloFetch } from "./http-comun.mjs";
 
 /** La única cifra de política. Todo lo demás se deriva de la respuesta. */
@@ -191,8 +191,7 @@ export const LLM_MODEL_KEY = "SQ_TEST_LLM_MODEL";
  * genérico no monta, y fingir que anda sería peor que decir que no está.
  */
 export function resolveLlmConfig(flags = {}) {
-  const { values: dotenv } = loadDotenv();
-  const pick = (k) => process.env[k] ?? dotenv[k];
+  const { pick } = leerConfig();
   const url = flags["llm-url"] ?? pick(LLM_URL_KEY);
   const model = flags["llm-model"] ?? pick(LLM_MODEL_KEY);
   if (!url) {

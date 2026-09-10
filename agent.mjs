@@ -81,10 +81,12 @@ function guardarEstado(estado) {
  * después de cambiar de KB **funciona**, y la calificación aterriza en un panel
  * que esa recuperación nunca tocó.
  */
-export function recordarRetrieval({ id, kb, celda }) {
+export function recordarRetrieval({ id, kb, kbId = null, celda }) {
   if (!id) return;
   const estado = leerEstado();
-  estado.retrieval = { id, kb, celda, at: Date.now() };
+  // `kb` es lo que el usuario escribió (slug o UUID) y `kbId` lo que se mandó:
+  // calificar después con cualquiera de los dos tiene que coincidir.
+  estado.retrieval = { id, kb, kbId, celda, at: Date.now() };
   guardarEstado(estado);
 }
 
@@ -109,7 +111,7 @@ export function retrievalUsable({ kb, celda }) {
         "  Volvé a correr  api retrieve  antes de calificar, o pasá --retrieval-id explícitamente.",
     );
   }
-  if (r.kb && kb && r.kb !== kb) {
+  if (r.kb && kb && r.kb !== kb && r.kbId !== kb) {
     throw new UsageError(
       `El retrievalId se capturó contra la KB ${r.kb} y estás calificando contra ${kb}.\n` +
         "  El servidor escribiría la fila igual: la calificación aterrizaría en una KB que esa recuperación nunca tocó.",
