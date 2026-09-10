@@ -438,9 +438,10 @@ async function comandoApi(flags, positional) {
   };
   const forma = FORMAS[sub] ?? `${cmd} api ${sub}`;
   assertPositionals(positional, spec.posicionales ?? 2, `api ${sub}`, forma);
-  if (sub === "loop" && !positional[2]) {
-    throw new UsageError(`Falta la pregunta.\n  Forma esperada: ${cmd} api loop --kb <slug> '<pregunta>'`);
-  }
+  // El rechazo de `loop` sin pregunta NO va acá, sino dentro de su handler:
+  // acá arriba throwear se saltea la traza y deja stdout en cero bytes bajo
+  // `--json`. Además partía en dos el mismo error — `""` moría acá y `"   "`
+  // adentro, con documentos distintos para dos formas de lo mismo.
   if (sub === "run" && !positional[2]) {
     throw new UsageError(`Falta el nombre de la petición.\n  Forma esperada: ${forma}\n  Vela con:  ${cmd} api list`);
   }
@@ -600,121 +601,132 @@ async function comandoApi(flags, positional) {
   }
 
   if (sub === "loop") {
-    const pregunta = positional[2];
-    if (!String(pregunta).trim()) {
-      throw new UsageError("La pregunta no puede estar en blanco: no hay nada que recuperar.");
-    }
-    const kb = required(flags, "kb", "la knowledge base");
-
-    // El umbral es la ÚNICA cifra de política del bucle. Todo lo demás sale de
-    // lo que contesta el servidor.
-    let umbral = MAX_SEND_RISK;
-    if (flags["max-send-risk"] !== undefined) {
-      const n = Number(flags["max-send-risk"]);
-      if (!Number.isFinite(n) || n < 0 || n > 1) {
-        throw new UsageError(`--max-send-risk es un riesgo, así que va entre 0 y 1 (recibí "${flags["max-send-risk"]}")`);
-      }
-      umbral = n;
-    }
-
-    // Los dos carriles tienen topes distintos: /retrieve topa en 50 y /query en
-    // 20. Con --managed se corren los dos con el MISMO número, así que un valor
-    // que uno acepta y el otro no se RECHAZA en vez de recortarse — recortar en
-    // silencio compararía dos cosas distintas y llamaría a eso un contraste.
-    let maxResults;
-    if (flags["max-results"] !== undefined) {
-      const tope = flags.managed ? MANAGED_MAX_RESULTS : RETRIEVE_MAX_RESULTS;
-      maxResults = intInRange(flags, "max-results", 1, tope);
-      if (flags.managed && maxResults > MANAGED_MAX_RESULTS) {
-        throw new UsageError(`--managed contrasta contra /agent/query, que topa en ${MANAGED_MAX_RESULTS}.`);
-      }
-    }
-
-    // `--no-generate` para tras recuperar, así que ni verifica ni contrasta:
-    // aceptar opciones que gobiernan esos pasos y no usarlas es el fallo
-    // silencioso que este CLI rechaza en todas partes (invariante 3).
-    if (flags["no-generate"]) {
-      for (const opt of ["show-evidence", "managed"]) {
-        if (flags[opt]) {
-          throw new UsageError(
-            `--${opt} no hace nada con --no-generate: el bucle para tras recuperar,\n` +
-              "  así que no hay verificación que mostrar ni carril gestionado que contrastar.",
-          );
-        }
-      }
-    }
-
-    const { apiUrl, token } = resolveApiConfig(flags);
-    // El modelo se resuelve ANTES de la primera llamada. `/agent/retrieve`
-    // gasta créditos, y una corrida que no puede terminar por falta de config
-    // no debería gastarlos primero para después decir que falta una variable.
-    // Es lo que hace que el 2 signifique de verdad "rechazada antes de empezar".
-    const llm = flags["no-generate"] ? null : resolveLlmConfig(flags);
-    const client = new SequentiaApiClient({ baseUrl: apiUrl, token, onDebug });
-
-    // La narración va a stderr siempre: bajo --json el único valor de stdout es
-    // la traza, y sin --json el informe se lee igual con el progreso al lado.
-    const mostrarEvidencia = Boolean(flags["show-evidence"]);
-    if (!mostrarEvidencia && !flags["no-generate"]) {
-      // `/verify` recupera a visibilidad INTERNA sea cual sea el alcance de la
-      // key, así que su evidencia se oculta salvo que la pidan. Solo se avisa
-      // cuando de verdad va a haber una verificación.
-      console.error("(la evidencia de verificación va oculta: /verify recupera a visibilidad interna — --show-evidence para verla)");
-    }
-
-    // La traza se crea ACA y se le pasa al bucle. Bajo `--json`, una corrida que
-    // muere a mitad de camino tiene que emitir igual lo anotado hasta ahí: cero
-    // bytes es indistinguible de un proceso que se murió, y quien parsea la
-    // salida no debería tener que distinguirlos.
+    // La traza se crea ANTES de validar los flags y de resolver la config, no
+    // junto a la primera llamada. Los rechazos tempranos —falta la pregunta,
+    // falta --kb, falta SQ_TEST_LLM_URL— salían por el manejador de arriba sin
+    // pasar por acá, y dejaban stdout en CERO BYTES bajo `--json`: exactamente
+    // el caso que la invariante promete que no existe. Quien parsea la salida
+    // no debería tener que distinguir "murió antes de anotar un paso" de "se
+    // murió el proceso", y el exit code ya dice cuál de los dos fue.
     const traza = [];
     const emitirJson = () => {
       if (flags.json) console.log(JSON.stringify(traza, null, 2));
     };
+
     try {
+      const pregunta = positional[2];
+      if (pregunta === undefined) {
+        throw new UsageError(`Falta la pregunta.\n  Forma esperada: ${forma}`);
+      }
+      if (!String(pregunta).trim()) {
+        // Un `"$q"` vacío en un script llega acá, no al caso de arriba, y es el
+        // más frecuente de los dos: la variable existe y salió en blanco.
+        throw new UsageError("La pregunta no puede estar en blanco: no hay nada que recuperar.");
+      }
+      const kb = required(flags, "kb", "la knowledge base");
+
+      // El umbral es la ÚNICA cifra de política del bucle. Todo lo demás sale de
+      // lo que contesta el servidor.
+      let umbral = MAX_SEND_RISK;
+      if (flags["max-send-risk"] !== undefined) {
+        const n = Number(flags["max-send-risk"]);
+        if (!Number.isFinite(n) || n < 0 || n > 1) {
+          throw new UsageError(`--max-send-risk es un riesgo, así que va entre 0 y 1 (recibí "${flags["max-send-risk"]}")`);
+        }
+        umbral = n;
+      }
+
+      // Los dos carriles tienen topes distintos: /retrieve topa en 50 y /query en
+      // 20. Con --managed se corren los dos con el MISMO número, así que un valor
+      // que uno acepta y el otro no se RECHAZA en vez de recortarse — recortar en
+      // silencio compararía dos cosas distintas y llamaría a eso un contraste.
+      let maxResults;
+      if (flags["max-results"] !== undefined) {
+        const tope = flags.managed ? MANAGED_MAX_RESULTS : RETRIEVE_MAX_RESULTS;
+        maxResults = intInRange(flags, "max-results", 1, tope);
+        if (flags.managed && maxResults > MANAGED_MAX_RESULTS) {
+          throw new UsageError(`--managed contrasta contra /agent/query, que topa en ${MANAGED_MAX_RESULTS}.`);
+        }
+      }
+
+      // `--no-generate` para tras recuperar, así que ni verifica ni contrasta:
+      // aceptar opciones que gobiernan esos pasos y no usarlas es el fallo
+      // silencioso que este CLI rechaza en todas partes (invariante 3).
+      if (flags["no-generate"]) {
+        for (const opt of ["show-evidence", "managed"]) {
+          if (flags[opt]) {
+            throw new UsageError(
+              `--${opt} no hace nada con --no-generate: el bucle para tras recuperar,\n` +
+                "  así que no hay verificación que mostrar ni carril gestionado que contrastar.",
+            );
+          }
+        }
+      }
+
+      const { apiUrl, token } = resolveApiConfig(flags);
+      // El modelo se resuelve ANTES de la primera llamada. `/agent/retrieve`
+      // gasta créditos, y una corrida que no puede terminar por falta de config
+      // no debería gastarlos primero para después decir que falta una variable.
+      // Es lo que hace que el 2 signifique de verdad "rechazada antes de empezar".
+      const llm = flags["no-generate"] ? null : resolveLlmConfig(flags);
+      const client = new SequentiaApiClient({ baseUrl: apiUrl, token, onDebug });
+
+      // La narración va a stderr siempre: bajo --json el único valor de stdout es
+      // la traza, y sin --json el informe se lee igual con el progreso al lado.
+      const mostrarEvidencia = Boolean(flags["show-evidence"]);
+      if (!mostrarEvidencia && !flags["no-generate"]) {
+        // `/verify` recupera a visibilidad INTERNA sea cual sea el alcance de la
+        // key, así que su evidencia se oculta salvo que la pidan. Solo se avisa
+        // cuando de verdad va a haber una verificación.
+        console.error("(la evidencia de verificación va oculta: /verify recupera a visibilidad interna — --show-evidence para verla)");
+      }
+
       await correrBucle({
-      client,
-      traza,
-      pregunta,
-      kb,
-      opciones: {
-        umbral,
-        maxResults,
-        generarRespuesta: !flags["no-generate"],
-        llm,
-        gestionado: Boolean(flags.managed),
-        flags,
-        onDebug,
-      },
-      // Los pasos son PROGRESO y van a stderr. La decisión no: es el
-      // resultado, y con `api loop > decision.txt` tiene que ser lo que queda
-      // en el archivo — narrarla por stderr dejaría el archivo vacío.
-      onPaso: (paso) => {
-        if (paso.paso !== "decidir") console.error(narrar(paso, { mostrarEvidencia, mostrarRespuesta: true }));
-      },
+        client,
+        traza,
+        pregunta,
+        kb,
+        opciones: {
+          umbral,
+          maxResults,
+          generarRespuesta: !flags["no-generate"],
+          llm,
+          gestionado: Boolean(flags.managed),
+          flags,
+          onDebug,
+        },
+        // Los pasos son PROGRESO y van a stderr. La decisión no: es el
+        // resultado, y con `api loop > decision.txt` tiene que ser lo que queda
+        // en el archivo — narrarla por stderr dejaría el archivo vacío.
+        onPaso: (paso) => {
+          if (paso.paso !== "decidir") console.error(narrar(paso, { mostrarEvidencia, mostrarRespuesta: true }));
+        },
       });
+
+      // La traza es un ARRAY en todos los caminos —incluido el que muere temprano,
+      // que emite `[]`—: quien la parsea no debería escribir dos formas según el
+      // desenlace, y el tipo no puede cambiar con él.
+      emitirJson();
+      if (!flags.json) {
+        const fin = traza.findLast((p) => p.paso === "decidir");
+        if (fin) console.log(narrar(fin, { mostrarEvidencia }).trimStart());
+        // El comando para calificar la corrida más tarde, si hay un id que lo
+        // permita. Va después de la decisión porque es lo que se hace con ella.
+        const rec = traza.find((p) => p.paso === "recuperar");
+        if (rec?.retrievalId) console.log(comandoParaCalificar(rec.retrievalId, kb));
+      }
+
+      // 0 mandar · 1 escalar. Un `--no-generate` no decide nada, y sale 0 porque
+      // hizo lo que se le pidió: el desenlace está en la traza, no en el código.
+      return decisionDe(traza) === "escalar" ? EXIT_TOOL_ERROR : EXIT_OK;
     } catch (err) {
       // El documento sale IGUAL, y después se relanza: el error lo sigue
-      // reportando el manejador de arriba, con su exit code.
+      // reportando el manejador de arriba, con su exit code. Cubre los dos
+      // desenlaces con una sola salida: el que muere a mitad de camino emite lo
+      // anotado hasta ahí, y el que se rechaza antes de empezar emite `[]`.
       emitirJson();
       throw err;
     }
-
-    // La traza es un ARRAY en todos los caminos —incluido el que muere temprano,
-    // que emite `[]`—: quien la parsea no debería escribir dos formas según el
-    // desenlace, y el tipo no puede cambiar con él.
-    emitirJson();
-    if (!flags.json) {
-      const fin = traza.findLast((p) => p.paso === "decidir");
-      if (fin) console.log(narrar(fin, { mostrarEvidencia }).trimStart());
-      // El comando para calificar la corrida más tarde, si hay un id que lo
-      // permita. Va después de la decisión porque es lo que se hace con ella.
-      const rec = traza.find((p) => p.paso === "recuperar");
-      if (rec?.retrievalId) console.log(comandoParaCalificar(rec.retrievalId, kb));
-    }
-
-    // 0 mandar · 1 escalar. Un `--no-generate` no decide nada, y sale 0 porque
-    // hizo lo que se le pidió: el desenlace está en la traza, no en el código.
-    return decisionDe(traza) === "escalar" ? EXIT_TOOL_ERROR : EXIT_OK;
   }
 
   if (sub === "list") {

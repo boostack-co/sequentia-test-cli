@@ -26,6 +26,7 @@ sq-test init          # crea ~/.config/sq-test/.env
 ```bash
 # lo que el CI corre, y no necesita ni credencial ni red
 node collection-lint.mjs
+node collection-sync-smoke.mjs
 node sq-test.mjs api list
 
 # el menú, guionado (cada argumento es una respuesta)

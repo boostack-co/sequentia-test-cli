@@ -209,25 +209,67 @@ export function resolveLlmConfig(flags = {}) {
   return { url, model, key: flags["llm-key"] ?? pick(LLM_KEY_KEY) ?? null };
 }
 
-/** Una respuesta del modelo del cliente. Sin dependencias: `fetch` y nada más. */
-export async function generar({ url, model, key }, mensajes, { timeoutMs = 120000, onDebug } = {}) {
-  const headers = { "Content-Type": "application/json", Accept: "application/json" };
-  if (key) headers.Authorization = `Bearer ${key}`;
-  if (onDebug) onDebug(`generando con ${model} en ${url}`);
+/**
+ * ¿El servidor rechazó la petición **por** `temperature`, y no por otra cosa?
+ *
+ * Se pide `400` Y que el mensaje nombre el parámetro. Las dos condiciones, no
+ * una: un `400` a secas puede ser un modelo que no existe o un cuerpo mal
+ * formado, y reintentar eso sin `temperature` gastaría una segunda llamada para
+ * volver a fallar igual, tapando el error real detrás de un síntoma inventado.
+ */
+export function rechazaTemperature(status, texto) {
+  return status === 400 && /temperature/i.test(String(texto));
+}
 
+/** Un POST al modelo. Separado para poder repetirlo con otro cuerpo. */
+async function postearAlModelo(url, headers, cuerpo, timeoutMs) {
   let res;
   try {
     res = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify({ model, messages: mensajes, temperature: 0 }),
+      body: JSON.stringify(cuerpo),
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
     const razon = err?.name === "TimeoutError" ? `timeout tras ${timeoutMs} ms` : err?.message || String(err);
     throw new LlmError(`No se pudo contactar tu modelo en ${url}: ${razon}`);
   }
-  const texto = await res.text();
+  return { res, texto: await res.text() };
+}
+
+/**
+ * Una respuesta del modelo del cliente. Sin dependencias: `fetch` y nada más.
+ *
+ * Devuelve `{ contenido, temperatura }`. La `temperatura` no es decoración: es
+ * lo que dice si la corrida se puede repetir, y eso va a la traza.
+ *
+ * `temperature: 0` se pide a propósito — el bucle decide sobre lo que el modelo
+ * escribió, y una corrida que no se puede repetir no se puede auditar. Pero los
+ * modelos de razonamiento lo **rechazan** con un `400` ("Only the default (1)
+ * value is supported"): la familia `o*` de OpenAI, y desde `gpt-5.5` también la
+ * principal. Exigirlo dejaría afuera a lo más nuevo del proveedor más común, y
+ * sin ningún workaround: no hay flag ni variable que pise el valor.
+ *
+ * Así que se reintenta UNA vez sin el parámetro, y el precio se **anota**. Este
+ * módulo no imprime; lo que no llega a la traza no existe para quien audita, y
+ * degradar el determinismo en silencio sería el mismo fallo callado que el CLI
+ * rechaza en todas partes.
+ */
+export async function generar({ url, model, key }, mensajes, { timeoutMs = 120000, onDebug } = {}) {
+  const headers = { "Content-Type": "application/json", Accept: "application/json" };
+  if (key) headers.Authorization = `Bearer ${key}`;
+  if (onDebug) onDebug(`generando con ${model} en ${url}`);
+
+  let temperatura = 0;
+  let { res, texto } = await postearAlModelo(url, headers, { model, messages: mensajes, temperature: 0 }, timeoutMs);
+
+  if (rechazaTemperature(res.status, texto)) {
+    temperatura = null;
+    if (onDebug) onDebug(`${model} rechaza temperature:0 — reintento sin el parámetro; la corrida deja de ser reproducible`);
+    ({ res, texto } = await postearAlModelo(url, headers, { model, messages: mensajes }, timeoutMs));
+  }
+
   if (!res.ok) throw new LlmError(`Tu modelo respondió ${res.status}: ${texto.slice(0, 300)}`);
 
   let cuerpo;
@@ -245,7 +287,7 @@ export async function generar({ url, model, key }, mensajes, { timeoutMs = 12000
         `  Recibí: ${JSON.stringify(cuerpo)?.slice(0, 200)}`,
     );
   }
-  return contenido;
+  return { contenido, temperatura };
 }
 
 /** El prompt. Corto a propósito: lo que se enseña es el reparto, no el prompt. */
@@ -335,7 +377,7 @@ export async function correrBucle({ client, pregunta, kb, opciones, onPaso = () 
   // variable de entorno.
   const llm = opciones.llm;
   const t2 = performance.now();
-  const crudo = await generar(llm, armarMensajes(pregunta, rec.chunks), { onDebug: opciones.onDebug });
+  const { contenido: crudo, temperatura } = await generar(llm, armarMensajes(pregunta, rec.chunks), { onDebug: opciones.onDebug });
   // Se recorta ACA, una sola vez, y lo recortado es lo que se mide y lo que se
   // manda. Medir una cosa y enviar otra es la trampa del tope de `claimText`.
   const respuesta = crudo.trim();
@@ -344,6 +386,8 @@ export async function correrBucle({ client, pregunta, kb, opciones, onPaso = () 
     ok: true,
     ms: Math.round(performance.now() - t2),
     modelo: llm.model,
+    // `null` = el modelo rechazó `temperature:0` y la corrida NO es repetible.
+    temperatura,
     caracteres: respuesta.length,
     declino: respuesta.includes(DECLINACION),
     respuesta,
@@ -436,7 +480,8 @@ export function narrar(paso, { mostrarEvidencia = false, mostrarRespuesta = fals
     case "recuperar":
       return `· recuperar   ${paso.fragmentos} fragmentos · ${paso.ms} ms${paso.retrievalId ? ` · id ${paso.retrievalId}` : ""}`;
     case "generar": {
-      const cabecera = `· generar     ${paso.caracteres} caracteres con ${paso.modelo} · ${paso.ms} ms${paso.declino ? " · DECLINÓ" : ""}`;
+      const temp = paso.temperatura === null ? " · SIN temperature:0, no reproducible" : "";
+      const cabecera = `· generar     ${paso.caracteres} caracteres con ${paso.modelo} · ${paso.ms} ms${temp}${paso.declino ? " · DECLINÓ" : ""}`;
       return mostrarRespuesta ? `${cabecera}\n${bloqueCitado(paso.respuesta)}` : cabecera;
     }
     case "verificar": {

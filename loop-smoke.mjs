@@ -1,14 +1,23 @@
 #!/usr/bin/env node
 /**
- * Ejercita la POLÍTICA y los CONTRATOS del bucle con respuestas fabricadas.
+ * Ejercita la POLÍTICA y los CONTRATOS del bucle con respuestas fabricadas, y
+ * la INVARIANTE DE SALIDA de `api loop`, que no es pura: es del proceso.
  *
- * Las dos son puras, así que se prueban sin credencial, sin modelo y sin red —
- * y corren en toda la matriz del CI. Es donde vale la pena gastar el esfuerzo:
- * un contrato mal escrito no falla, deja pasar; y una política mal escrita
- * manda una respuesta que nadie evaluó.
+ * Las dos primeras son puras, así que se prueban sin credencial, sin modelo y
+ * sin red. Es donde vale la pena gastar el esfuerzo: un contrato mal escrito no
+ * falla, deja pasar; y una política mal escrita manda una respuesta que nadie
+ * evaluó. La tercera necesita levantar el CLI de verdad —lo que se rompió fue
+ * el ORDEN de dos declaraciones, y ninguna función pura lo ve— pero tampoco
+ * toca la red: todos sus casos se rechazan antes de la primera llamada.
  *
  *   node loop-smoke.mjs
  */
+import { spawnSync } from "node:child_process";
+import { createServer } from "node:http";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   DECLINACION,
   PREFIJO_CITA,
@@ -21,6 +30,8 @@ import {
   revisarAntesDeVerificar,
   sinCitas,
   valorSeguroParaComando,
+  generar,
+  rechazaTemperature,
   CONTRATO_RETRIEVE,
   CONTRATO_VERIFY,
   ContractError,
@@ -214,5 +225,179 @@ comprobar("un id con NUL se declina", () => valorSeguroParaComando(`ret${String.
 // rechazar de más, que es otro defecto.
 comprobar("`;` y `$()` no se declinan: el citado los desarma", () => valorSeguroParaComando("ret; $(whoami)").seguro, true);
 
+// ---------------------------------------------------------------------------
+// La invariante de salida: `--json` escribe un documento en TODOS los caminos.
+//
+// Toda salida alcanzable de `api loop` emite un valor, y siempre del mismo
+// tipo: un array. La corrida que muere antes de anotar un paso emite `[]`.
+// Cero bytes es indistinguible de un proceso que se murió, y quien parsea la
+// salida no debería escribir dos caminos según el desenlace — para eso está el
+// exit code.
+//
+// Lo que se rompió fue el ORDEN: la traza se declaraba junto a la primera
+// llamada, así que todo rechazo anterior —falta --kb, falta el modelo— salía
+// por el manejador global sin pasar nunca por el emisor. Por eso el guion
+// levanta el proceso en vez de llamar a una función: el defecto vivía entre
+// dos declaraciones, y ninguna función pura lo alcanza.
+//
+// Corre con HOME y cwd apuntando a un directorio vacío. Si el `.env` real del
+// desarrollador se colara, su SQ_TEST_LLM_URL haría que estos casos siguieran
+// de largo hasta la red y el guion estaría probando otra cosa — en verde.
+// ---------------------------------------------------------------------------
+const CLI = fileURLToPath(new URL("./sq-test.mjs", import.meta.url));
+const SANDBOX = mkdtempSync(join(tmpdir(), "sq-test-loop-smoke-"));
+const ENTORNO = { ...process.env, HOME: SANDBOX, USERPROFILE: SANDBOX };
+for (const clave of Object.keys(ENTORNO)) {
+  // Cualquier SQ_TEST_* heredado gana sobre el `.env` y cambiaría el desenlace.
+  if (clave.startsWith("SQ_TEST_")) delete ENTORNO[clave];
+}
+// Una celda que NO resuelve: ninguno de estos casos debería llegar a la red, y
+// si un día uno llega, que falle en DNS y no contra una celda de verdad.
+ENTORNO.SQ_TEST_API_URL = "https://celda.invalid";
+ENTORNO.SQ_TEST_TOKEN = "sk_live_delguion";
+
+function correrCli(args) {
+  const r = spawnSync(process.execPath, [CLI, ...args], { cwd: SANDBOX, env: ENTORNO, encoding: "utf8" });
+  return { codigo: r.status, salida: r.stdout ?? "", error: r.stderr ?? "" };
+}
+
+const KB = "8772076b-f6f1-4007-aa2e-6eeee8818808";
+const RECHAZOS_TEMPRANOS = [
+  ["falta el modelo", ["--kb", KB, "--json", "¿cómo restablezco una contraseña?"]],
+  ["falta --kb", ["--json", "¿cómo restablezco una contraseña?"]],
+  ["la pregunta llegó vacía", ["--kb", KB, "--json", ""]],
+  ["la pregunta no vino", ["--kb", KB, "--json"]],
+  ["--max-send-risk fuera de rango", ["--kb", KB, "--json", "--max-send-risk", "5", "q"]],
+  ["una opción que no se usaría", ["--kb", KB, "--json", "--no-generate", "--show-evidence", "q"]],
+];
+
+for (const [que, args] of RECHAZOS_TEMPRANOS) {
+  const r = correrCli(["api", "loop", ...args]);
+  comprobar(`${que}: la salida es JSON, y es un array`, () => Array.isArray(JSON.parse(r.salida)), true);
+  comprobar(`${que}: y va vacío — no llegó a anotar un paso`, () => JSON.parse(r.salida).length, 0);
+  comprobar(`${que}: sale 2, rechazada antes de empezar`, () => r.codigo, 2);
+}
+
+// El control en la dirección contraria, que es lo que hace que la guarda no sea
+// "emitir siempre": sin --json el documento NO aparece. Emitirlo igual
+// ensuciaría stdout de quien no lo pidió, y `api loop > decision.txt` guardaría
+// un `[]` en lugar de la decisión, que es el archivo que ese redirect existe
+// para dejar.
+comprobar(
+  "sin --json el documento no sale: rechazar de más es otro defecto",
+  () => correrCli(["api", "loop", "--kb", KB, "q"]).salida,
+  "",
+);
+// Y el error se sigue reportando por stderr con su motivo, no se lo come el
+// documento: emitir la traza no es "tragarse el fallo".
+comprobar(
+  "el motivo del rechazo sigue saliendo por stderr",
+  () => /SQ_TEST_LLM_URL/.test(correrCli(["api", "loop", "--kb", KB, "--json", "q"]).error),
+  true,
+);
+
+// ---------------------------------------------------------------------------
+// `temperature: 0` y los modelos que lo rechazan
+//
+// El bucle lo pide a propósito: decide sobre lo que el modelo escribió, y una
+// corrida que no se puede repetir no se puede auditar. Pero los modelos de
+// razonamiento lo rechazan con un 400 —la familia `o*` de OpenAI, y desde
+// `gpt-5.5` también la principal—, y no hay flag que pise el valor, así que
+// exigirlo dejaba afuera a lo más nuevo del proveedor más común.
+//
+// Se reintenta UNA vez sin el parámetro y el precio se anota. Lo que estas
+// afirmaciones fijan es que el reintento se dispare SOLO por temperature, que
+// ocurra exactamente una vez, y que la traza diga cuándo se pagó.
+// ---------------------------------------------------------------------------
+const TEMP_400 = '{"error":{"message":"Unsupported value: \'temperature\' does not support 0 with this model. Only the default (1) value is supported."}}';
+
+comprobar("un 400 que nombra temperature sí es ese caso", () => rechazaTemperature(400, TEMP_400), true);
+comprobar("y no importa la caja", () => rechazaTemperature(400, '{"message":"Temperature is not supported"}'), true);
+// Las dos condiciones, no una. Reintentar un 400 cualquiera sin `temperature`
+// gastaría una segunda llamada para volver a fallar igual, y taparía el error
+// real detrás de un síntoma inventado.
+comprobar("un 400 por otra cosa NO lo es", () => rechazaTemperature(400, '{"error":{"message":"model not found"}}'), false);
+comprobar("un 401 que nombra temperature tampoco: no es un 400", () => rechazaTemperature(401, TEMP_400), false);
+comprobar("un 200 no lo es", () => rechazaTemperature(200, TEMP_400), false);
+comprobar("un cuerpo que no es cadena no rompe", () => rechazaTemperature(400, null), false);
+
+/** Un `/chat/completions` de mentira. Devuelve las peticiones que recibió. */
+async function conModeloFalso(responder, fn) {
+  const recibidas = [];
+  const srv = createServer((req, res) => {
+    let cuerpo = "";
+    req.on("data", (c) => (cuerpo += c));
+    req.on("end", () => {
+      recibidas.push(JSON.parse(cuerpo));
+      const { status, texto } = responder(recibidas.length, recibidas.at(-1));
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(texto);
+    });
+  });
+  await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
+  try {
+    const salida = await fn(`http://127.0.0.1:${srv.address().port}/v1/chat/completions`);
+    return { salida, recibidas };
+  } finally {
+    // `close()` solo deja de aceptar conexiones NUEVAS; las que `fetch` dejó
+    // abiertas por keep-alive siguen vivas y mantendrían el loop ocupado.
+    srv.closeAllConnections?.();
+    await new Promise((ok) => srv.close(ok));
+  }
+}
+
+const OK_200 = JSON.stringify({ choices: [{ message: { content: "Respondo. [1]" } }] });
+const MSJ = [{ role: "user", content: "hola" }];
+
+// El camino normal: el modelo acepta temperature:0 y NO hay reintento.
+await (async () => {
+  const { salida, recibidas } = await conModeloFalso(
+    () => ({ status: 200, texto: OK_200 }),
+    (url) => generar({ url, model: "m", key: null }, MSJ),
+  );
+  comprobar("un modelo que acepta temperature:0 se llama UNA vez", recibidas.length, 1);
+  comprobar("y se le manda el parámetro", recibidas[0].temperature, 0);
+  comprobar("la traza registra que la corrida es repetible", salida.temperatura, 0);
+  comprobar("y devuelve el contenido", salida.contenido, "Respondo. [1]");
+})();
+
+// El camino nuevo: lo rechaza, se reintenta sin el parámetro, se anota.
+await (async () => {
+  const { salida, recibidas } = await conModeloFalso(
+    (n) => (n === 1 ? { status: 400, texto: TEMP_400 } : { status: 200, texto: OK_200 }),
+    (url) => generar({ url, model: "o-cualquiera", key: null }, MSJ),
+  );
+  comprobar("un modelo que lo rechaza se llama DOS veces, no más", recibidas.length, 2);
+  comprobar("la primera lleva temperature", recibidas[0].temperature, 0);
+  comprobar("la segunda NO lo lleva — no se manda en 1, se omite", "temperature" in recibidas[1], false);
+  comprobar("y la traza dice que el determinismo se perdió", salida.temperatura, null);
+  comprobar("la respuesta llega igual", salida.contenido, "Respondo. [1]");
+})();
+
+// El control en la otra dirección: un 400 por OTRA razón no se reintenta, y el
+// error sale con su cuerpo en vez de quedar tapado por una segunda llamada.
+await (async () => {
+  let mensaje = "";
+  const { recibidas } = await conModeloFalso(
+    () => ({ status: 400, texto: '{"error":{"message":"model not found"}}' }),
+    async (url) => {
+      try {
+        await generar({ url, model: "inventado", key: null }, MSJ);
+      } catch (err) {
+        mensaje = err.message;
+      }
+    },
+  );
+  comprobar("un 400 por otra cosa NO se reintenta", recibidas.length, 1);
+  comprobar("y el error conserva el motivo real", () => /model not found/.test(mensaje), true);
+})();
+
+rmSync(SANDBOX, { recursive: true, force: true });
+
 console.log(fallos ? `\n${fallos} fallos` : "\nTodo en verde.");
-process.exit(fallos ? 1 : 0);
+// `process.exitCode` y NO `process.exit()`: con un servidor http de por medio,
+// salir a la fuerza agarra un handle a medio cerrar y libuv aborta el proceso
+// (en Windows, `UV_HANDLE_CLOSING` en async.c — exit 127 con el informe entero
+// ya impreso en verde, que es la peor forma de romper un guion de pruebas).
+// Así el proceso termina cuando el loop se vacía, sin la carrera.
+process.exitCode = fallos ? 1 : 0;

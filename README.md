@@ -258,7 +258,17 @@ Reporta el estado de cada scope en **tres** valores, y el tercero no es relleno:
 | `402` workspace | suspendido o forzando SSO: la key es válida y lo cerrado es el workspace |
 | `401` | la key no fue aceptada, y entonces **no se puede afirmar nada de sus scopes** |
 
-Y dice **dónde se consigue lo que falta**: los tres formularios de creación de keys de Admin Studio **no son superconjunto entre sí**, así que ninguna key creada desde uno solo los abre todos. `gaps.read` y `kb.read_internal` no figuran en ninguno.
+Y dice **dónde se consigue lo que falta**: las pantallas de creación de keys **no son superconjunto entre sí**, así que ninguna key creada desde una sola las abre todas — `gaps.read` y `kb.read_internal` no figuran en ninguna, y se conceden por la API de creación de keys.
+
+**Antes de eso dice si hace falta conseguirlo, que es la pregunta anterior.** La colección declara los scopes de cada petición **en OR** —alcanza con tener uno—, así que el informe cruza los que faltan o quedaron sin sondear contra los confirmados:
+
+```
+· agent.retrieve   solo se alcanza por "Agent API / 1. Retrieve", que gasta créditos · pero rag.query abre esas peticiones igual: no hace falta
+```
+
+Esa línea es la diferencia entre pedir un permiso y darse cuenta de que ya se tiene el equivalente. Los `agent.*` que cobran son a la vez los que **nunca** se pueden sondear y los que tienen una alternativa más amplia, así que sin ella el informe deja abierta justo la pregunta que se hace quien los mira. Y solo aparece con la alternativa **confirmada**: tranquilizar de más manda a no pedir lo que sí se necesita, que es el defecto opuesto y no es mejor.
+
+Las alternativas salen del catálogo empaquetado, no de una tabla escrita a mano — este repo es público e independiente, y una tabla de provisioning acá se desactualizaría en silencio.
 
 > **Sobre `kb.read_internal`**, el informe avisa en vez de reforzar el error habitual: gobierna un puñado de peticiones y **no es una frontera de confidencialidad general**. Lo que acota lo que una key alcanza es su lista blanca de KBs más un filtro de audiencia que falla cerrado. Provisionar una key creyendo que negar ese scope oculta el contenido interno es el error que este comando existe para no cometer.
 
@@ -278,6 +288,8 @@ node sq-test.mjs api loop --kb <slug> --json "…" | jq       # un solo valor JS
 ```
 
 El modelo es **tuyo**: este CLI no trae ninguno. El shape es el `/chat/completions` de OpenAI, que cubre vLLM, Ollama, LM Studio, OpenRouter y OpenAI directo tal cual. **Azure queda afuera a propósito** — necesita `endpoint`, `apiVersion` y `deployment`, y fingir que anda sería peor que decir que no está.
+
+Se pide `temperature: 0`, porque el bucle decide sobre lo que el modelo escribió y una corrida que no se puede repetir no se puede auditar. Los **modelos de razonamiento lo rechazan** con un `400` —la familia `o*` de OpenAI, y desde `gpt-5.5` también la principal—, así que si el servidor lo rechaza se reintenta una vez sin el parámetro. El precio no se paga en silencio: el paso `generar` de la traza lleva `temperatura: null` y la narración dice `SIN temperature:0, no reproducible`. El reintento pide **dos** condiciones, un `400` **y** que el mensaje nombre el parámetro: un `400` por otra cosa —un modelo que no existe, un cuerpo mal formado— se reporta tal cual, en vez de gastar una segunda llamada para volver a fallar igual con el motivo real tapado.
 
 **Sin framework de agentes**, y no por ascetismo: un framework resuelve selección no determinista de herramientas, y este bucle es lineal y fijo, así que no habría nada que orquestar. Lo caro de acá —los contratos, la política, la traza— ningún framework lo trae, y un framework lo esconde.
 
@@ -326,7 +338,9 @@ El tope se mide en **unidades UTF-16**, no en puntos de código: un par subrogad
 
 #### `--json` siempre escribe un documento
 
-Toda salida alcanzable emite un valor, y siempre del **mismo tipo**: un array. Una corrida que muere antes de anotar un paso emite `[]`. Cero bytes es indistinguible de un proceso que se murió, y quien parsea la salida no debería tener que escribir dos caminos según el desenlace.
+Toda salida alcanzable emite un valor, y siempre del **mismo tipo**: un array. Una corrida que muere antes de anotar un paso emite `[]` — falta `--kb`, falta `SQ_TEST_LLM_URL`, la pregunta llegó en blanco: todas escriben el documento y salen con `2`. Cero bytes es indistinguible de un proceso que se murió, y quien parsea la salida no debería tener que escribir dos caminos según el desenlace: para eso está el exit code.
+
+El límite está donde el bucle todavía no existe. Una **invocación** que el parseo rechaza —una opción desconocida, un posicional de más— falla antes de llegar al comando y reporta solo por stderr, igual que en cualquier otro comando del CLI: ahí no hay corrida de la que emitir traza. Un script que redirige `--json` a `jq` no se topa con eso salvo que tenga mal escrita la línea, que es un error suyo y no un desenlace del bucle.
 
 #### Modos y salida
 
@@ -348,6 +362,8 @@ En [`collection/`](collection/) vive la colección pública de la API, con su en
 Cada petición lleva en su descripción un bloque `sq-test` legible por máquina con sus scopes, qué persiste y si gasta créditos — que es lo que después alimenta la guarda de `--yes`. Ver [`collection/README.md`](collection/README.md) para usarla y [`collection/PUBLISHING.md`](collection/PUBLISHING.md) para mantenerla.
 
 **El original vive acá y lo de Postman es una copia.** `api collection --check` es lo que hace cumplir esa regla: trae la publicada y reporta la deriva **en los dos sentidos** — lo que está acá y no allá (falta republicar) y lo que está allá y no acá (alguien editó en la interfaz de Postman). Sale con `1` si hay deriva, así que puede romper un pipeline.
+
+**La colección está publicada** en [este workspace público](https://www.postman.com/egonzalez-834a9dbf-7945626/sequentia-api). Para contrastar contra ella hace falta una *access key* de lectura propia en `SQ_TEST_COLLECTION_URL` — no viene por default a propósito: es un token, y un token en un repo público es algo que alguien rota algún día. Cómo se saca está en [`collection/PUBLISHING.md`](collection/PUBLISHING.md).
 
 ```bash
 node sq-test.mjs api collection --check      # necesita SQ_TEST_COLLECTION_URL
@@ -459,6 +475,7 @@ La referencia pública de las herramientas muestra ejemplos de `tools/call` suel
 | `doctor-smoke.mjs` | Ejercita esa deducción con sondeos fabricados, sin red ni credencial. Corre en el CI. |
 | `collection-sync.mjs` | Trae la colección publicada y la contrasta con la empaquetada. |
 | `collection-lint.mjs` | Las guardas sobre la colección: variables, defaults inalcanzables, y que la prosa no contradiga la metadata. |
+| `collection-sync-smoke.mjs` | Ejercita el comparador sirviendo la colección —mutada a propósito— desde `127.0.0.1`, sin Postman ni credenciales. Corre en el CI. |
 | `loop.mjs` | El bucle: los contratos de respuesta, la política de riesgo y la traza. |
 | `loop-smoke.mjs` | Ejercita esa política y esos contratos con respuestas fabricadas, sin red ni modelo. Corre en el CI. |
 | `collection/` | La colección Postman pública y su entorno, más cómo se usa y cómo se mantiene. |

@@ -111,6 +111,12 @@ jobs:
           # que una peticion escribe o cuesta, el dano es de quien la corre.
           # Corre sin credenciales y sin red, como el resto del CI.
           node collection-lint.mjs
+          # `collection-lint` valida la FORMA de la coleccion empaquetada; esto
+          # valida la COMPARACION contra lo publicado, que es otra cosa. Levanta
+          # un servidor en 127.0.0.1 y le sirve la coleccion mutada: sin Postman,
+          # sin credenciales y sin salir de la maquina. Una regresion en el
+          # comparador no rompe nada visible — deja de avisar, en silencio.
+          node collection-sync-smoke.mjs
           # El menu, guionado. `2.2` (api list) lee la coleccion empaquetada, asi
           # que corre sin credencial de API y sin red — igual que `api list`.
           SQ_TEST_TOKEN=clave-de-prueba-del-ci node menu-smoke.mjs 2 2 "" b q > /dev/null
