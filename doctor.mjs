@@ -22,7 +22,7 @@
  *     ausentes mandaría a pedir permisos que quizá ya están.
  */
 
-import { ApiTransportError } from "./api-client.mjs";
+import { ApiTransportError, causaDe } from "./api-client.mjs";
 import { cargarCatalogo, resolverPeticion } from "./catalog.mjs";
 
 /** Los tres estados posibles de un scope. El tercero no es un detalle. */
@@ -99,39 +99,41 @@ export function scopesDeclarados(entradas) {
   return todos;
 }
 
+/** Lo que se dice de cada causa. La `clase` es la que después elige el remedio. */
+const CLASES = {
+  credencial: { clase: "credencial", detalle: "la key no fue aceptada" },
+  plan: { clase: "plan", detalle: "el plan no incluye el módulo agéntico" },
+  creditos: { clase: "creditos", detalle: "sin créditos de IA" },
+  workspace: { clase: "workspace", detalle: "el workspace no está operativo (suspendido o con SSO forzado)" },
+  // La lista blanca de KBs no es un scope, pero para la deducción vale lo
+  // mismo: la key es válida y el plan está bien, y lo que falta es un permiso.
+  "lista-blanca": { clase: "scope", detalle: "la key no tiene acceso a esa knowledge base" },
+  scope: { clase: "scope", detalle: "acceso denegado" },
+  "no-encontrado": { clase: "no-encontrado", detalle: "no existe, o es de otro workspace" },
+};
+
 /**
  * Clasifica un fallo. Devuelve `{ clase, detalle }`.
  *
  * `clase` separa las tres cosas que se confunden y tienen remedios distintos:
  * la credencial, el plan del workspace, y los permisos de esa credencial.
+ *
+ * La lectura del status y del cuerpo NO vive acá: la hace `causaDe` en
+ * `api-client.mjs`, una sola vez, y el cliente la deja en `err.causa`. Este
+ * módulo tenía su propia copia de esas regex sobre `err.message` —la prosa en
+ * español que el cliente compone— y las dos habían divergido: un 402 de plan
+ * sin `code` se leía como workspace cerrado por acá y como plan por allá, y la
+ * clase es lo que elige el remedio que el informe recomienda. Un error
+ * fabricado sin `causa` (los guiones de prueba) pasa por la misma función que
+ * el real, así que no hay una segunda lectura que pueda volver a divergir.
+ *
+ * `error` es todo lo que NO habla de la credencial: un 429 que sobrevivió al
+ * reintento, un 5xx, un timeout. Ese sondeo no concluyó, y nada más.
  */
 export function clasificar(err) {
   if (!(err instanceof ApiTransportError)) return { clase: "error", detalle: err?.message ?? String(err) };
-  const { status, code } = err;
-  if (status === 401) return { clase: "credencial", detalle: "la key no fue aceptada" };
-  if (status === 402) {
-    // Tres cosas con el mismo status y tres remedios que no se parecen: cambiar
-    // de plan, cargar saldo, o hablar con administración. Confundirlas manda a
-    // rotar una key que estaba bien.
-    //
-    // Se mira el cuerpo además del `code` porque el cliente ya lo hace
-    // (`api-client.mjs` clasifica con `code === "MODULE_NOT_ENTITLED" ||
-    // /module/i`), y las dos lecturas habían divergido: sin `code`, el cliente
-    // decía "el plan no incluye el módulo" y este clasificador decía "workspace
-    // no operativo" — el mismo 402 mandando a mirar el plan por un lado y a
-    // hablar con administración por el otro. La `clase` es lo que después elige
-    // el remedio que el informe recomienda, así que la discrepancia no era
-    // cosmética.
-    const texto = `${err.message ?? ""} ${err.body ?? ""}`;
-    if (code === "MODULE_NOT_ENTITLED" || /module/i.test(texto)) {
-      return { clase: "plan", detalle: "el plan no incluye el módulo agéntico" };
-    }
-    if (/credit/i.test(texto)) return { clase: "creditos", detalle: "sin créditos de IA" };
-    return { clase: "workspace", detalle: "el workspace no está operativo (suspendido o con SSO forzado)" };
-  }
-  if (status === 403) return { clase: "scope", detalle: "acceso denegado" };
-  if (status === 404) return { clase: "no-encontrado", detalle: "no existe, o es de otro workspace" };
-  return { clase: "error", detalle: err.message };
+  const causa = err.causa ?? causaDe(err.status, err.code, `${err.message ?? ""} ${err.body ?? ""}`);
+  return CLASES[causa] ?? { clase: "error", detalle: err.message };
 }
 
 /**
@@ -216,11 +218,21 @@ export function estadoDeScopes({ sondeos, confirmados, entradas }) {
   return scopes;
 }
 
+/** Las clases que hablan del workspace entero y no de un permiso. */
+const CLASES_DE_CREDENCIAL = new Set(["credencial", "plan", "creditos", "workspace"]);
+
 /**
  * Corre el diagnóstico. No lanza por un fallo de sondeo: un 403 **es** el dato.
  *
  * Solo se rinde si la celda no responde, porque ahí no hay nada que perfilar y
  * seguir sondeando produciría una lista de fallos que culpan a la credencial.
+ *
+ * Los sondeos van **por etapas**: los que ya tienen todas sus variables se
+ * lanzan juntos, y lo que cosechan habilita la etapa siguiente. Con el catálogo
+ * de hoy son tres —`List knowledge bases` da el `{{kbId}}` del que cuelgan
+ * cinco, y `List articles` el `{{articleId}}` de `Get article`—, así que el
+ * comando paga tres viajes en vez de siete. El informe sale en el orden del
+ * catálogo pase lo que pase, para que dos corridas se puedan comparar.
  */
 export async function diagnosticar(client, { onPaso = () => {} } = {}) {
   const { entradas, coleccion } = cargarCatalogo();
@@ -246,47 +258,75 @@ export async function diagnosticar(client, { onPaso = () => {} } = {}) {
     return informe;
   }
 
-  // --- Fase 2 y 3: sondeos, en orden de dependencia -----------------------
+  // --- Fase 2 y 3: sondeos, por etapas de dependencia ----------------------
   const vars = {};
   const confirmados = new Set();
+  const orden = sondeosDe(entradas);
+  const resultados = new Map();
+  let pendientes = orden;
 
-  for (const entrada of sondeosDe(entradas)) {
-    const faltan = [...entrada.variables].filter((v) => !(v in vars));
-    if (faltan.length) {
-      informe.sondeos.push({
-        peticion: entrada.nombre,
-        scopes: entrada.scopes,
-        resultado: SIN_SONDEAR,
-        motivo: `no se pudo resolver ${faltan.map((v) => `{{${v}}}`).join(", ")} — dependía de un sondeo anterior`,
-      });
-      continue;
-    }
-
-    onPaso("sondeo", `${entrada.metodo} ${entrada.nombre}`);
-    const peticion = resolverPeticion(entrada, vars, coleccion);
-    try {
-      const { data } = await client.request(peticion.metodo, peticion.ruta, {
-        body: peticion.body,
-        headers: peticion.cabeceras,
-      });
-      for (const s of entrada.scopes) confirmados.add(s);
-      informe.sondeos.push({ peticion: entrada.nombre, scopes: entrada.scopes, resultado: CONFIRMADO });
-      cosechar(entrada, data, vars);
-    } catch (err) {
-      const { clase, detalle } = clasificar(err);
-      informe.sondeos.push({ peticion: entrada.nombre, scopes: entrada.scopes, resultado: AUSENTE, clase, detalle });
-      // Un fallo que NO es de scope habla del workspace entero, no de un
-      // permiso: se registra una vez y no se repite por cada sondeo.
-      if (clase !== "scope" && clase !== "no-encontrado" && !informe.credencial.estado) {
-        informe.credencial = { estado: clase, detalle };
+  while (pendientes.length) {
+    const listos = pendientes.filter((e) => [...e.variables].every((v) => v in vars));
+    if (!listos.length) break;
+    for (const entrada of listos) onPaso("sondeo", `${entrada.metodo} ${entrada.nombre}`);
+    const salidas = await Promise.allSettled(
+      listos.map((entrada) => {
+        const peticion = resolverPeticion(entrada, vars, coleccion);
+        return client.request(peticion.metodo, peticion.ruta, { body: peticion.body, headers: peticion.cabeceras });
+      }),
+    );
+    // La cosecha va en orden de catálogo, no de llegada: si dos sondeos
+    // devolvieran un `{{kbId}}` distinto, el que gana tiene que ser siempre el
+    // mismo, o dos corridas iguales darían informes distintos.
+    listos.forEach((entrada, i) => {
+      const salida = salidas[i];
+      if (salida.status === "fulfilled") {
+        for (const s of entrada.scopes) confirmados.add(s);
+        resultados.set(entrada.nombre, { peticion: entrada.nombre, scopes: entrada.scopes, resultado: CONFIRMADO });
+        cosechar(entrada, salida.value.data, vars);
+      } else {
+        const { clase, detalle } = clasificar(salida.reason);
+        resultados.set(entrada.nombre, { peticion: entrada.nombre, scopes: entrada.scopes, resultado: AUSENTE, clase, detalle });
       }
-    }
+    });
+    pendientes = pendientes.filter((e) => !listos.includes(e));
   }
 
-  if (!informe.credencial.estado) {
-    informe.credencial = confirmados.size
-      ? { estado: "ok", detalle: `${confirmados.size} scopes confirmados` }
-      : { estado: "sin-permisos", detalle: "la key es válida pero ningún sondeo pasó" };
+  for (const entrada of pendientes) {
+    const faltan = [...entrada.variables].filter((v) => !(v in vars));
+    resultados.set(entrada.nombre, {
+      peticion: entrada.nombre,
+      scopes: entrada.scopes,
+      resultado: SIN_SONDEAR,
+      motivo: `no se pudo resolver ${faltan.map((v) => `{{${v}}}`).join(", ")} — dependía de un sondeo anterior`,
+    });
+  }
+  informe.sondeos = orden.map((e) => resultados.get(e.nombre));
+
+  // Un fallo que habla del workspace entero —la key, el plan, el saldo— se
+  // registra una vez, y gana el primero en orden de catálogo. Un `error`
+  // (429 tras el reintento, 5xx, timeout) NO entra acá: dice que ESE sondeo no
+  // concluyó, no que la credencial esté mal, y fijar el veredicto con él
+  // tapaba a los otros seis sondeos que sí habían confirmado sus scopes.
+  const deCredencial = informe.sondeos.find((s) => s.resultado === AUSENTE && CLASES_DE_CREDENCIAL.has(s.clase));
+  const inconclusos = informe.sondeos.filter((s) => s.resultado === AUSENTE && s.clase === "error");
+  if (deCredencial) {
+    informe.credencial = { estado: deCredencial.clase, detalle: deCredencial.detalle };
+  } else if (confirmados.size) {
+    informe.credencial = { estado: "ok", detalle: `${confirmados.size} scopes confirmados` };
+  } else if (inconclusos.length) {
+    informe.credencial = {
+      estado: "inconcluso",
+      detalle: `${inconclusos.length} sondeo(s) fallaron por transporte: ${inconclusos[0].detalle}`,
+    };
+  } else {
+    informe.credencial = { estado: "sin-permisos", detalle: "la key es válida pero ningún sondeo pasó" };
+  }
+  if (inconclusos.length && informe.credencial.estado !== "inconcluso") {
+    informe.avisos.push(
+      `${inconclusos.length} sondeo(s) no concluyeron por un error de transporte (${inconclusos[0].detalle}); ` +
+        "sus scopes quedan sin sondear, no ausentes. Volvé a correr el diagnóstico para cerrarlos.",
+    );
   }
 
   informe.scopes = estadoDeScopes({ sondeos: informe.sondeos, confirmados, entradas });
@@ -401,8 +441,10 @@ export function formatearInforme(informe) {
     plan: "✘ el plan del workspace no incluye el módulo agéntico (402)",
     creditos: "✘ sin créditos de IA (402) — la key y los permisos están bien",
     workspace: "✘ el workspace no está operativo (402) — la key es válida",
+    inconcluso: "? no se pudo concluir: ningún sondeo respondió, por errores de transporte y no de permisos",
   };
   L.push(`Credencial: ${titulo[cred.estado] ?? `? ${cred.estado}`}`);
+  if (cred.estado === "inconcluso") L.push(`  ${cred.detalle}. No dice nada de la key: volvé a correrlo.`);
   if (cred.estado === "plan") L.push("  Es del plan, no de la key: pedir más scopes no lo arregla.");
   if (cred.estado === "workspace") L.push("  Lo que está cerrado es el workspace: suspendido, o forzando SSO.");
   L.push("");
