@@ -23,7 +23,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { USER_ENV_FILE } from "./commands.mjs";
-import { cargarCatalogo } from "./catalog.mjs";
+import { catalogoDesde } from "./catalog.mjs";
+import { describirFalloFetch } from "./http-comun.mjs";
 
 /** Dónde queda la copia de lo último que se trajo. */
 export const CACHE_FILE = join(dirname(USER_ENV_FILE), "coleccion-publicada.json");
@@ -45,8 +46,7 @@ export async function traerPublicada(url, { timeoutMs = 20000 } = {}) {
   try {
     res = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(timeoutMs) });
   } catch (err) {
-    const razon = err?.name === "TimeoutError" ? `timeout tras ${timeoutMs} ms` : err?.message || String(err);
-    throw new SyncError(`No se pudo traer la colección publicada: ${razon}`);
+    throw new SyncError(`No se pudo traer la colección publicada: ${describirFalloFetch(err, timeoutMs)}`);
   }
   const texto = await res.text();
   if (!res.ok) {
@@ -113,10 +113,13 @@ export function guardarCache(coleccion) {
   return CACHE_FILE;
 }
 
-/** Carga un catálogo desde un objeto ya parseado, escribiéndolo a un temporal. */
-export function catalogoDe(coleccion, rutaTemporal) {
-  writeFileSync(rutaTemporal, JSON.stringify(coleccion), "utf8");
-  return cargarCatalogo(rutaTemporal);
+/**
+ * El catálogo de una colección ya parseada. Valida al armarlo, así que va
+ * ANTES de `guardarCache`: lo que se guarda es lo que se pudo cargar, y una
+ * colección remota rota no queda en la caché con el comando fallando.
+ */
+export function catalogoDe(coleccion) {
+  return catalogoDesde(coleccion);
 }
 
 /** El informe en texto. */

@@ -176,7 +176,7 @@ El otro frente de integración de Sequentia: la REST que acepta API key. Entra p
 node sq-test.mjs api health
 node sq-test.mjs api list
 node sq-test.mjs api run 'List knowledge bases' --json | jq
-node sq-test.mjs api run 'Get knowledge base' --var kbId=<uuid>
+node sq-test.mjs api run 'Get knowledge base' --var kbId=<slug o uuid>
 ```
 
 ### El ejecutor genérico
@@ -202,6 +202,8 @@ node sq-test.mjs api retrieve --kb <slug> --q "¿cómo restablezco la contraseñ
 node sq-test.mjs api feedback --kb <slug> --rating helpful --yes   # usa el id recordado
 node sq-test.mjs api index-status --kb <slug>                      # ni escribe ni cuesta: no pide --yes
 ```
+
+`--kb`, `--kbs` y `--var kbId=` aceptan el **UUID o el slug**, igual que en el carril MCP. El servidor resuelve `knowledgeBaseId` solo por id, así que el slug se cambia del lado del cliente contra `GET /knowledge-bases` antes de mandarlo — una petición que no gasta créditos. El comando que el menú imprime conserva el slug, para que sea legible.
 
 **Los contratos se parecen y no son iguales**, y equivocarse es un 400:
 

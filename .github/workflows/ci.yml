@@ -17,13 +17,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Buscar API keys
+      # Tres clases, no una: la API key de Sequentia, la access key / API key
+      # de Postman (que PUBLISHING.md promete que este job rechaza) y un host
+      # de celda real, que es lo que ya se filtró una vez (84cbd7d) con este
+      # job en verde. `mcp.sequentia.co` es público y queda fuera del patrón:
+      # lo que no puede entrar es un origen de celda con la forma f-t-g-c.
+      - name: Buscar credenciales y hosts de celda
         run: |
-          if grep -rIn --exclude-dir=.git -E 'sk_live_[A-Za-z0-9]+_[0-9a-f]{64}' .; then
-            echo "::error::Se encontró lo que parece una API key real."
-            exit 1
-          fi
-          echo "OK: ninguna API key en el árbol."
+          patrones=(
+            'sk_live_[A-Za-z0-9]+_[0-9a-f]{64}'
+            'access_key=[A-Za-z0-9_-]{20,}'
+            'PMAK-[A-Za-z0-9]{20,}'
+            'f[0-9]+-t[0-9]+-g[0-9]+-c[0-9]+\.sequentia\.co'
+          )
+          for p in "${patrones[@]}"; do
+            if grep -rIn --exclude-dir=.git -E "$p" .; then
+              echo "::error::Se encontró lo que parece una credencial o un host de celda real (patrón: $p)."
+              exit 1
+            fi
+          done
+          echo "OK: ninguna credencial ni host de celda en el árbol."
       - name: El .env no debe estar versionado
         run: |
           if git ls-files --error-unmatch .env >/dev/null 2>&1; then
@@ -107,6 +120,13 @@ jobs:
           # credencial y sin red — incluida la rama que la colección de hoy no
           # alcanza. Un motivo mal asignado no falla, solo miente.
           node doctor-smoke.mjs
+          # Las piezas compartidas: la fusion del .env, el comando reproducible,
+          # la resolucion de KB del carril REST y la descripcion de errores.
+          node commands-smoke.mjs
+          # AGENT_COMMANDS y la coleccion declaran lo mismo por duplicado, y la
+          # guarda de --yes lee de uno u otro segun el comando: sin esto, una
+          # deriva entre ambos pasaba en verde.
+          node agent-smoke.mjs
           # La coleccion es cara al cliente: si una descripcion miente sobre lo
           # que una peticion escribe o cuesta, el dano es de quien la corre.
           # Corre sin credenciales y sin red, como el resto del CI.
@@ -148,6 +168,10 @@ jobs:
           esperar 2 node sq-test.mjs query-kb --kb x --q -v
           esperar 2 node sq-test.mjs query-kb --kb x --q Y mode precise
           esperar 2 node sq-test.mjs query-kb --kb x --q hola --mdo precise
+          # Los booleanos del carril API no valen en un comando MCP: aceptarlos
+          # y no usarlos es el mismo fallo silencioso que el --mdo de arriba.
+          esperar 2 node sq-test.mjs list-kbs --managed
+          esperar 2 node sq-test.mjs query-kb --kb x --q hola --show-evidence
           esperar 2 node sq-test.mjs verify-claim --kb x --claim y
           esperar 2 node sq-test.mjs verify-claim --kb x --claim y --yes=false
           esperar 2 node sq-test.mjs call verify_claim '{}'
