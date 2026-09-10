@@ -258,7 +258,17 @@ Reporta el estado de cada scope en **tres** valores, y el tercero no es relleno:
 | `402` workspace | suspendido o forzando SSO: la key es válida y lo cerrado es el workspace |
 | `401` | la key no fue aceptada, y entonces **no se puede afirmar nada de sus scopes** |
 
-Y dice **dónde se consigue lo que falta**: los tres formularios de creación de keys de Admin Studio **no son superconjunto entre sí**, así que ninguna key creada desde uno solo los abre todos. `gaps.read` y `kb.read_internal` no figuran en ninguno.
+Y dice **dónde se consigue lo que falta**: las pantallas de creación de keys **no son superconjunto entre sí**, así que ninguna key creada desde una sola las abre todas — `gaps.read` y `kb.read_internal` no figuran en ninguna, y se conceden por la API de creación de keys.
+
+**Antes de eso dice si hace falta conseguirlo, que es la pregunta anterior.** La colección declara los scopes de cada petición **en OR** —alcanza con tener uno—, así que el informe cruza los que faltan o quedaron sin sondear contra los confirmados:
+
+```
+· agent.retrieve   solo se alcanza por "Agent API / 1. Retrieve", que gasta créditos · pero rag.query abre esas peticiones igual: no hace falta
+```
+
+Esa línea es la diferencia entre pedir un permiso y darse cuenta de que ya se tiene el equivalente. Los `agent.*` que cobran son a la vez los que **nunca** se pueden sondear y los que tienen una alternativa más amplia, así que sin ella el informe deja abierta justo la pregunta que se hace quien los mira. Y solo aparece con la alternativa **confirmada**: tranquilizar de más manda a no pedir lo que sí se necesita, que es el defecto opuesto y no es mejor.
+
+Las alternativas salen del catálogo empaquetado, no de una tabla escrita a mano — este repo es público e independiente, y una tabla de provisioning acá se desactualizaría en silencio.
 
 > **Sobre `kb.read_internal`**, el informe avisa en vez de reforzar el error habitual: gobierna un puñado de peticiones y **no es una frontera de confidencialidad general**. Lo que acota lo que una key alcanza es su lista blanca de KBs más un filtro de audiencia que falla cerrado. Provisionar una key creyendo que negar ese scope oculta el contenido interno es el error que este comando existe para no cometer.
 

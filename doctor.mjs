@@ -35,19 +35,31 @@ export const SIN_SONDEAR = "sin-sondear";
  *
  * Los formularios de creación de keys de Admin Studio **no son superconjunto
  * entre sí**: ninguna key creada desde uno solo los abre todos, y por eso
- * "probá otra vez con otra key" es un mal consejo. Lo que sigue es lo que se
- * puede afirmar; donde no hay certeza, el informe lo dice en vez de inventar
- * una vía que no existe.
+ * "probá otra vez con otra key" es un mal consejo.
+ *
+ * Este archivo decía antes que un scope que no figura en ningún formulario
+ * había que "pedirlo por la vía interna", y **esa vía no existe**. No fue
+ * inocuo: mandaba a esperar una gestión con otra persona en lugar de a hacer
+ * una llamada de un minuto, que es el peor error que puede cometer un comando
+ * cuyo trabajo es *decir dónde se consigue lo que falta*. Un consejo que no se
+ * puede ejecutar es peor que no dar ninguno: el que no da ninguno manda a
+ * preguntar, y el ejecutable-en-apariencia manda a esperar.
+ *
+ * Lo que sigue es solo lo que se puede afirmar sin copiar acá una tabla de
+ * provisioning que este repo no puede mantener sincronizada — es público y
+ * deliberadamente independiente. Nombrar qué formulario ofrece cada scope sería
+ * una segunda copia de una verdad ajena, y la copia que quede vieja va a
+ * mentir con la misma cara de certeza que la "vía interna".
  */
 export const PROCEDENCIA = {
-  "gaps.read": "no figura en los formularios de Admin Studio: hay que pedirla por la vía interna",
-  "kb.read_internal": "no figura en los formularios de Admin Studio: hay que pedirla por la vía interna",
+  "gaps.read": "no figura en los formularios de creación de keys, pero la API de creación de keys sí lo acepta",
+  "kb.read_internal": "no figura en los formularios de creación de keys, pero la API de creación de keys sí lo acepta",
 };
 
 /** Lo que se dice de un `agent.*` que falta, cuando no hay algo más preciso. */
 const PROCEDENCIA_AGENTE =
-  "varios de los `agent.*` no salen de los formularios de Admin Studio; " +
-  "si el que usaste no lo ofrecía, hay que pedirla por la vía interna";
+  "los `agent.*` se reparten entre los formularios, y varios no están en ninguno; " +
+  "los que no, se conceden por la API de creación de keys";
 
 /**
  * Advertencia que el informe emite siempre que `kb.read_internal` aparece.
@@ -263,6 +275,7 @@ export async function diagnosticar(client, { onPaso = () => {} } = {}) {
   }
 
   informe.scopes = estadoDeScopes({ sondeos: informe.sondeos, confirmados, entradas });
+  informe.alternativas = alternativasDe(entradas);
 
   informe.rateLimit = client.rateLimit ?? null;
   if (informe.scopes["kb.read_internal"]) informe.avisos.push(AVISO_INTERNO);
@@ -294,11 +307,52 @@ function primerId(data, claves) {
   return null;
 }
 
-/** Dónde se consigue un scope que falta. */
-export function comoConseguir(scope) {
+/**
+ * Para cada scope, los OTROS que abren alguna de sus mismas peticiones.
+ *
+ * La colección declara los scopes de cada petición **en OR** —alcanza con tener
+ * uno—, así que un scope que falta puede no hacer ninguna falta: si otro de los
+ * que esa petición acepta ya está confirmado, el endpoint se alcanza igual.
+ *
+ * Sale del catálogo del repo, no de una tabla escrita a mano acá. Es la
+ * diferencia entre un dato que se mantiene solo cuando la colección cambia y
+ * uno que hay que acordarse de actualizar — y acordarse es justo lo que no
+ * pasó con la "vía interna".
+ */
+export function alternativasDe(entradas) {
+  const alt = {};
+  for (const e of entradas.values()) {
+    if (e.scopes.length < 2) continue;
+    for (const s of e.scopes) {
+      (alt[s] ??= new Set());
+      for (const otro of e.scopes) if (otro !== s) alt[s].add(otro);
+    }
+  }
+  return Object.fromEntries(Object.entries(alt).map(([s, v]) => [s, [...v]]));
+}
+
+/**
+ * Dónde se consigue un scope que falta — o por qué no hace falta conseguirlo.
+ *
+ * El contexto es opcional para que llamarla con el scope solo siga andando; sin
+ * él simplemente no puede decir lo primero, que es lo más útil que sabe decir.
+ */
+export function comoConseguir(scope, { alternativas, scopes } = {}) {
+  // Lo primero, porque cambia la respuesta entera: pedir un permiso que no hace
+  // falta cuesta una gestión y no arregla nada.
+  const cubren = (alternativas?.[scope] ?? []).filter((otro) => scopes?.[otro]?.estado === CONFIRMADO);
+  if (cubren.length) {
+    return (
+      `no hace falta pedirlo: la key ya tiene ${cubren.join(" y ")}, ` +
+      "y la colección declara esos scopes en OR — alcanza con uno para abrir las mismas peticiones"
+    );
+  }
   if (PROCEDENCIA[scope]) return PROCEDENCIA[scope];
   if (scope.startsWith("agent.")) return PROCEDENCIA_AGENTE;
-  return "debería estar en el formulario de creación de keys de Admin Studio; los tres formularios no son superconjunto entre sí, así que revisá por cuál se creó";
+  return (
+    "las pantallas de creación de keys ofrecen listas distintas y ninguna es superconjunto de la otra: " +
+    "si el scope no está en la que usaste, probá la otra, y si no está en ninguna se concede por la API de creación de keys"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -346,8 +400,17 @@ export function formatearInforme(informe) {
   const ancho = Math.max(...filas.map(([s]) => s.length), 10);
   for (const [scope, info] of filas) {
     let nota = "";
-    if (info.estado === AUSENTE) nota = info.ambiguo ? `falta alguno de: ${info.ambiguo.join(", ")}` : "no lo tiene";
+    if (info.estado === AUSENTE) nota = info.ambiguo ? `hace falta UNO de: ${info.ambiguo.join(", ")}` : "no lo tiene";
     if (info.estado === SIN_SONDEAR) nota = info.motivo ?? "ninguna petición gratuita lo ejercita";
+    // El dato que le falta a la fila: que un scope quede sin sondear NO
+    // significa que haga falta conseguirlo. Los `agent.*` que cobran son
+    // exactamente los que nunca se pueden sondear Y los que tienen una
+    // alternativa más amplia, así que sin esta línea el informe deja abierta la
+    // única pregunta que el usuario se hace mirándolos: «¿tengo que pedir esto?».
+    const cubren = (informe.alternativas?.[scope] ?? []).filter((o) => informe.scopes[o]?.estado === CONFIRMADO);
+    if (cubren.length && info.estado !== CONFIRMADO) {
+      nota += `${nota ? " · " : ""}pero ${cubren.join(" y ")} abre esas peticiones igual: no hace falta`;
+    }
     L.push(`  ${ICONO[info.estado]} ${scope.padEnd(ancho)}  ${nota}`);
   }
   L.push("");
@@ -355,7 +418,9 @@ export function formatearInforme(informe) {
   const faltan = filas.filter(([, i]) => i.estado === AUSENTE).map(([s]) => s);
   if (faltan.length) {
     L.push("Cómo conseguir lo que falta");
-    for (const s of faltan) L.push(`  ${s}: ${comoConseguir(s)}`);
+    for (const s of faltan) {
+      L.push(`  ${s}: ${comoConseguir(s, { alternativas: informe.alternativas, scopes: informe.scopes })}`);
+    }
     L.push("");
   }
 
