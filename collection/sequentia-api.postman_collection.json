@@ -1,447 +1,1767 @@
 {
   "info": {
-    "_postman_id": "5c2f9a10-6d3b-4f57-9a21-8b0d7e4c1f30",
-    "name": "Sequentia API",
-    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Las superficies de Sequentia que aceptan **API key**: la REST bajo `/api/v1`, incluido el carril agéntico.\n\nSe importa, se rellenan tres variables y corre contra tu workspace. Antes de darle a «Run folder», leé `collection/README.md`: hay peticiones que **escriben** en tu workspace y otras que **gastan créditos de IA**, y no hay peticiones de limpieza.\n\nEmpezá por `System → Health`, que es la única sin credencial: si falla ahí, el problema es la URL y no la key.\n\nCada petición declara en su descripción un bloque `sq-test` legible por máquina, con los scopes que necesita, qué persiste y si gasta créditos. Ese bloque es lo que lee el CLI `sequentia-test-cli`, que usa esta colección como catálogo ejecutable."
+    "name": "Sequentia — Public APIs",
+    "description": "Sequentia's API-key surfaces: the REST API under `/api/v1` and the MCP server.\n\n**Running the whole collection WRITES to the workspace, and nothing here cleans up.** Point it at a workspace you are willing to leave marked, not at production, or run the read-only requests one at a time:\n\n- **Agent API → Feedback** leaves a helpfulness-feedback row against the captured `retrievalId`, which feeds the KB's analytics.\n- **Agent API → Report a knowledge gap** leaves a knowledge-gap row in the KB's gap queue, visible to whoever triages it.\n- **Ingest (iPaaS) → Create a draft article** leaves a DRAFT article in the KB — unpublished, but real content someone has to delete.\n\nNothing in this collection deletes any of it — removing a draft, a gap row or a feedback row is an Admin Studio job.\n\n**6 of the requests spend AI credits** on every run: *Agent API → Query (Sequentia synthesises)*, *Agent API → Retrieve (bring your own LLM)*, *Agent API → Verify a claim*, *Ingest (iPaaS) → Create a draft article*, *MCP → query_knowledge_base*, *MCP → verify_claim*. *Knowledge Bases → Query* does NOT, despite the name — it is a lexical article search.\n\nWhether that lands on Sequentia credits or on your own provider key depends on the STAGE, not on the request: **embeddings are Sequentia-billed with no BYOAI path at all** (`ai-gateway.ts`, the pre-call credit gate says so in as many words), and *Agent → Retrieve* embeds the query on every call. Completions do follow a BYOAI key — and where `ENABLE_BYOAI_PLATFORM_FEE` is on, a 20% platform fee still debits Sequentia credits for them. So BYOAI moves part of the bill, never all of it: a workspace can still run out of credits, or collect a 402, on a run whose completions were all external.\n\n**And 1 more carries a flat per-call debit that depends on the deployment**: *MCP → list_knowledge_bases*. It is `MCP_B1_CREDITS_PER_CALL`, which defaults to 0 — so usually free, but not free by contract. Everything else bills nothing.\n\n**Setup.** Import the companion environment, then fill in four values. `baseUrl` — NOT a vanity host: REST is served per DEPLOYMENT, so copy the origin of the direct URL in Admin Studio → MCP Server (e.g. `https://your-cell.example`). `mcpUrl` — the full MCP endpoint from that same page — copy what it shows rather than assuming its shape. It is USUALLY a different host from `baseUrl` (the universal gateway, stable across cell migrations), but a deployment whose config does not know that gateway falls back to this cell's own origin + `/mcp`, and then the two DO share a host. Both ship as unreachable placeholders on purpose — a default that happens to resolve is one a reader can leave in place while their key travels to it as a bearer token. `apiKey` — and NO clickable form mints one key that runs this whole collection, which is the part worth knowing before you start. **Admin Studio → Agent Playground**, with every box ticked, is the best single credential; the form preselects only three of them, and a key accepted straight from it fails most of the Agent API folder. Outside it: `analytics.read`, `articles.write` and `gaps.read`. `gaps.read` is offered by no form at all — that one needs a key minted through `POST /api/v2/api-keys`. The per-form offer lists and which request needs what are in `docs/customer/api/postman/README.md`. And `kbId` — run *Knowledge Bases → List* and copy an id. Those four are all a person fills: `articleId`, `retrievalId` and `mcpSessionId` are captured by the requests that produce them.\n\nThe `apiKey` variable is typed `secret`, which MASKS it in the UI and nothing more: a shared or initial value can still leave in an export. Keep the real key as a current value, or in Postman Vault.\n\n**Auth.** Bearer token on every request except *System → Health*.\n\n**Entitlement.** The whole Agent API folder, the MCP folder and *Knowledge Bases → Query* need the agentic API module (Team plan or above). Without it they answer 402 — that is a plan issue, not a bad key.\n\n**Scopes.** Each request names the scope it needs in its own description; read those rather than assuming a universal default. The General APIs form starts with `kb.read`, `kb.search` and `articles.read` ticked, none of which covers the Agent API or the KB query. Only `query`, `retrieve` and `verify` take a broad `rag.query` in place of their dedicated scope; `gap-report` needs `gaps.write`, `index-status` needs `kb.read`, and `feedback` has no alternative at all.\n\n**Machine-readable.** Every request's description ends with a fenced `sq-test` JSON block — scopes, what it persists, whether it spends credits, what it captures and its transport — which is the contract tooling such as `sequentia-test-cli` loads this collection by. The MCP folder is marked `transport: \"mcp\"`, so a REST consumer skips it while it stays runnable here.\n\nGenerated by `scripts/docs/build-postman-collection.mjs` — edit the generator, not this file.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
     "type": "bearer",
-    "bearer": [{ "key": "token", "value": "{{apiKey}}", "type": "string" }]
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{apiKey}}",
+        "type": "string"
+      }
+    ]
   },
   "variable": [
-    { "key": "articleId", "value": "", "type": "string" },
-    { "key": "retrievalId", "value": "", "type": "string" },
-    { "key": "retrievalIdAt", "value": "", "type": "string" },
-    { "key": "retrievalIdKb", "value": "", "type": "string" }
+    {
+      "key": "retrievalId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "mcpSessionId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "articleId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "retrievalIdSource",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "articleIdSource",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "retrievalIdAt",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "articleIdAt",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "retrievalIdKb",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "articleIdKb",
+      "value": "",
+      "type": "string"
+    }
   ],
   "item": [
     {
       "name": "System",
-      "description": "El primer diagnóstico. `Health` no lleva credencial a propósito: separa «la URL está mal» de «la key está mal», que es la confusión que más tiempo cuesta.",
       "item": [
         {
           "name": "Health",
           "request": {
             "method": "GET",
-            "auth": { "type": "noauth" },
-            "header": [{ "key": "Accept", "value": "application/json" }],
-            "url": { "raw": "{{baseUrl}}/api/v1/health", "host": ["{{baseUrl}}"], "path": ["api", "v1", "health"] },
-            "description": "Comprueba que la celda responde. **No usa credencial**, así que un fallo acá señala `baseUrl` y no `apiKey`. Corré ésta primero, siempre.\n\n```sq-test\n{\"scopes\":[],\"auth\":false,\"persists\":null,\"spendsCredits\":false}\n```"
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "health"
+              ]
+            },
+            "description": "Liveness probe. The only endpoint here that needs no API key — useful to confirm `baseUrl` is right before debugging a 401.\n\n**Auth:** none.\n\n```sq-test\n{\"scopes\":[],\"persists\":null,\"spendsCredits\":false,\"auth\":false,\"internalRead\":false,\"captures\":[],\"transport\":\"rest\"}\n```",
+            "auth": {
+              "type": "noauth"
+            }
           },
-          "response": []
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
     {
       "name": "Knowledge Bases",
-      "description": "Lectura de la REST pública. Nada de acá escribe ni gasta créditos.",
       "item": [
         {
           "name": "List knowledge bases",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "knowledge-bases"
+              ]
+            },
+            "description": "Every KB this key can reach. If the key carries a KB allowlist, the list is already filtered to it. Start here to fill in `kbId`.\n\n**Scope:** `kb.read`\n\n```sq-test\n{\"scopes\":[\"kb.read\"],\"persists\":null,\"spendsCredits\":false,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"rest\"}\n```"
+          },
+          "response": [],
           "event": [
             {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "// Se captura el primer id SOLO con respuesta exitosa: los cuerpos de error",
-                  "// de este carril también pueden traer campos con forma de id, y guardar uno",
-                  "// de esos dejaría las peticiones siguientes apuntando a nada.",
-                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
-                  "  try {",
-                  "    const body = pm.response.json();",
-                  "    const kbs = Array.isArray(body) ? body : (body && body.knowledgeBases) || [];",
-                  "    if (kbs.length && kbs[0].id && !pm.variables.get('kbId')) {",
-                  "      console.log('Primera KB disponible: ' + kbs[0].id + ' (' + (kbs[0].name || kbs[0].slug || '') + ')');",
-                  "      console.log('Copiala a la variable kbId del entorno para correr el resto.');",
-                  "    }",
-                  "  } catch (e) {",
-                  "    console.error('La respuesta no era JSON: ' + e.message);",
-                  "  }",
-                  "}"
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});"
                 ]
               }
             }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
-            "url": { "raw": "{{baseUrl}}/api/v1/knowledge-bases", "host": ["{{baseUrl}}"], "path": ["api", "v1", "knowledge-bases"] },
-            "description": "Las knowledge bases que alcanza tu key. **Corré ésta segunda**: de acá sale el `kbId` que necesita casi todo lo demás. La consola imprime el primer id para que lo copies al entorno.\n\nLo que ves acá no es «todo el workspace», sino lo que la **lista blanca de KBs de la credencial** permite.\n\n```sq-test\n{\"scopes\":[\"kb.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
-          },
-          "response": []
+          ]
         },
         {
           "name": "Get knowledge base",
           "request": {
             "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
+            "header": [],
             "url": {
               "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "knowledge-bases", "{{kbId}}"]
-            },
-            "description": "Detalle de una KB.\n\nUn `404` acá no significa necesariamente que el id no exista: el servidor responde **lo mismo** para una KB inexistente y para una de otro workspace, a propósito, para no revelar cuáles existen.\n\n```sq-test\n{\"scopes\":[\"kb.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
-          },
-          "response": []
-        },
-        {
-          "name": "List articles",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "// Captura de `articleId` para que «Get article» sea ejecutable sin copiar a mano.",
-                  "// Solo con 2xx, por lo mismo que en la lista de KBs.",
-                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
-                  "  try {",
-                  "    const body = pm.response.json();",
-                  "    const arts = Array.isArray(body) ? body : (body && (body.articles || body.results)) || [];",
-                  "    if (arts.length && arts[0].id) {",
-                  "      pm.collectionVariables.set('articleId', arts[0].id);",
-                  "      console.log('articleId capturado: ' + arts[0].id);",
-                  "    }",
-                  "  } catch (e) {",
-                  "    console.error('La respuesta no era JSON: ' + e.message);",
-                  "  }",
-                  "}"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/articles?limit=5",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "articles"],
-              "query": [
-                { "key": "q", "value": "contraseña", "disabled": true, "description": "El filtro de texto, **desactivado a propósito**: la petición se llama *List articles* y tiene que listar en la primera corrida. Tildalo para filtrar. **Se llama `q`**: un `search=` se ignora en silencio y devuelve el listado entero — tildá éste y probá el otro, es la trampa que este parámetro existe para mostrar." },
-                { "key": "limit", "value": "5" }
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "knowledge-bases",
+                "{{kbId}}"
               ]
             },
-            "description": "Listado de artículos, con filtro de texto.\n\n**El parámetro es `q`, no `search`.** Mandar `search=` no da error: devuelve el listado sin filtrar, que es peor que un error porque parece que funcionó.\n\nCaptura el primer `id` en la variable de colección `articleId`.\n\n```sq-test\n{\"scopes\":[\"kb.search\"],\"persists\":null,\"spendsCredits\":false,\"captures\":[\"articleId\"]}\n```"
+            "description": "\n**Scope:** `kb.read`\n\n```sq-test\n{\"scopes\":[\"kb.read\"],\"persists\":null,\"spendsCredits\":false,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"rest\"}\n```"
           },
-          "response": []
-        },
-        {
-          "name": "Get article",
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/articles/{{articleId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "articles", "{{articleId}}"]
-            },
-            "description": "Un artículo completo. Usa el `articleId` que capturó «List articles».\n\n`articleId` es una variable **de colección**, no de entorno, y es deliberado: Postman resuelve el entorno primero, así que declararla allí —aunque fuera vacía— le ganaría a la captura y mandaría `/articles/`, que el servidor rutea al **listado**: un `200` con la carga equivocada.\n\n```sq-test\n{\"scopes\":[\"articles.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
-          },
-          "response": []
-        },
-        {
-          "name": "Query knowledge base (léxica)",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"query\": \"¿cómo restablezco la contraseña de un usuario?\",\n  \"maxResults\": 5,\n  \"includeMetadata\": true\n}",
-              "options": { "raw": { "language": "json" } }
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/query",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "query"]
-            },
-            "description": "Búsqueda **léxica** dentro de una KB. El nombre engaña: pese a llamarse `query` y pedir `rag.query`, **no sintetiza nada y no gasta créditos de IA**. Para la respuesta generada está el carril agéntico.\n\n**Busca sobre los ARTÍCULOS de la KB, no sobre sus documentos ingeridos**, y esa distinción explica el resultado vacío más común: una KB \"documental\" —contenido cargado como documento, vectorizado, sin publicar como artículos— devuelve `200` con `totalFound: 0` para cualquier término, mientras el panel de Pruebas RAG del Studio responde la misma pregunta sin problema. No está rota: son dos índices distintos. Medido: sobre una KB con 0 artículos y 1 documento indexado, ésta devuelve 0 para `maria`, `Gabriel` y `Nazaret`, y `Agent API → 1. Retrieve` devuelve 5 fragmentos para las tres.\n\nSi tu KB es documental, el carril que buscás es **`Agent API → 1. Retrieve`** (fragmentos) o **`3. Query`** (respuesta sintetizada). Los dos gastan créditos; ésta no.\n\nEl cuerpo acepta `query`, `maxResults` e `includeMetadata`. Un `limit` se descarta en silencio.\n\n```sq-test\n{\"scopes\":[\"rag.query\"],\"persists\":null,\"spendsCredits\":false}\n```"
-          },
-          "response": []
-        },
-        {
-          "name": "Analytics summary",
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/analytics",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "analytics"]
-            },
-            "description": "Resumen de uso de la KB.\n\nPide `analytics.read`, que **no está** entre los scopes del formulario de Agent Playground: una key creada ahí, con todas las casillas marcadas, igual falla acá.\n\n```sq-test\n{\"scopes\":[\"analytics.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
-          },
-          "response": []
-        },
-        {
-          "name": "Analytics — searches",
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/analytics/searches",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "analytics", "searches"]
-            },
-            "description": "Qué se buscó en esta KB.\n\n```sq-test\n{\"scopes\":[\"analytics.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
-          },
-          "response": []
-        },
-        {
-          "name": "Analytics — feedback",
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/analytics/feedback",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "analytics", "feedback"]
-            },
-            "description": "El lado de lectura de lo que escribe `Agent API → Feedback`. Sirve para comprobar que una calificación aterrizó donde se esperaba — y para ver el daño si aterrizó en la KB equivocada.\n\n```sq-test\n{\"scopes\":[\"analytics.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
-          },
-          "response": []
-        },
-        {
-          "name": "Analytics — top articles",
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/analytics/top-articles",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "analytics", "top-articles"]
-            },
-            "description": "Los artículos más servidos.\n\n```sq-test\n{\"scopes\":[\"analytics.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
-          },
-          "response": []
-        },
-        {
-          "name": "Knowledge gaps",
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/gaps",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "gaps"]
-            },
-            "description": "La cola de huecos de conocimiento — el lado de lectura de lo que escribe `Agent API → Gap report`.\n\n**Pide `gaps.read`, y ese scope no se puede conceder desde ningún formulario de Admin Studio.** Es distinto de `gaps.write`: escribir un hueco es clicable, leer la cola no. Si esta petición da `403` con una key que sí puede reportar huecos, es esto y no un error tuyo.\n\n```sq-test\n{\"scopes\":[\"gaps.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
-          },
-          "response": []
-        },
-        {
-          "name": "Knowledge gaps — stats",
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/gaps/stats",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "gaps", "stats"]
-            },
-            "description": "Agregados de la cola de huecos. Mismo scope de solo-API que la anterior.\n\n```sq-test\n{\"scopes\":[\"gaps.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
-          },
-          "response": []
-        },
-        {
-          "name": "Categories (iPaaS)",
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/ipaas/categories/{{kbId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "ipaas", "categories", "{{kbId}}"]
-            },
-            "description": "Las categorías de una KB. Vive bajo el montaje `/api/v1/ipaas`, no bajo el de knowledge bases: es la única de esta carpeta que no comparte prefijo con las demás.\n\n```sq-test\n{\"scopes\":[\"kb.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "Agent API",
-      "description": "El carril agéntico. **Acá empieza lo que cuesta y lo que deja rastro**: cuatro de las seis gastan créditos de IA y dos escriben en tu workspace. La carpeta está en orden de ejecución: `Retrieve` captura el `retrievalId` que `Feedback` necesita.\n\nEl reparto que este carril soporta es: Sequentia **recupera** y **verifica**, tu modelo **genera**, y vos **decidís** qué hacer con el veredicto.",
-      "item": [
-        {
-          "name": "1. Retrieve",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "// El `retrievalId` se captura SOLO con respuesta exitosa. Este carril lo",
-                  "// incluye también en los cuerpos de 402, 500 y 502: capturarlo de uno de",
-                  "// esos ataría un feedback posterior a una consulta que no produjo respuesta.",
-                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
-                  "  try {",
-                  "    const body = pm.response.json();",
-                  "    if (body && body.retrievalId) {",
-                  "      pm.collectionVariables.set('retrievalId', body.retrievalId);",
-                  "      // Se guarda CUÁNDO y CONTRA QUÉ KB. El consumidor los mira antes de",
-                  "      // usarlo: calificar con un id de otra KB funciona —el servidor escribe",
-                  "      // lo que diga el cuerpo— y la calificación aterriza en un panel que",
-                  "      // esa recuperación nunca tocó.",
-                  "      pm.collectionVariables.set('retrievalIdAt', String(Date.now()));",
-                  "      pm.collectionVariables.set('retrievalIdKb', String(pm.variables.get('kbId') || ''));",
-                  "      console.log('retrievalId capturado: ' + body.retrievalId);",
-                  "    }",
-                  "  } catch (e) {",
-                  "    console.error('La respuesta no era JSON: ' + e.message);",
-                  "  }",
-                  "}"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"query\": \"¿cómo restablezco la contraseña de un usuario?\",\n  \"knowledgeBaseId\": \"{{kbId}}\",\n  \"maxResults\": 10,\n  \"includeContent\": true\n}",
-              "options": { "raw": { "language": "json" } }
-            },
-            "url": { "raw": "{{baseUrl}}/api/v1/agent/retrieve", "host": ["{{baseUrl}}"], "path": ["api", "v1", "agent", "retrieve"] },
-            "description": "Recupera fragmentos con procedencia, **sin generar nada**. Es el primer paso del carril propio: lo que le pasás después a tu modelo.\n\n**Gasta créditos** aunque no sintetice: embebe la consulta en cada llamada.\n\nOjo con dos asimetrías respecto de `Query`, que son `400` si te equivocás:\n\n- acá el campo es `knowledgeBaseId`, **en singular**;\n- `maxResults` llega hasta **50** (en `Query` el tope es 20).\n\n`relevanceScore` puede venir en `null`, y eso significa «el recuperador no emitió similitud», no «irrelevante». Su rango es `[-1, 1]`.\n\n```sq-test\n{\"scopes\":[\"agent.retrieve\",\"rag.query\"],\"persists\":null,\"spendsCredits\":true,\"internalRead\":true,\"captures\":[\"retrievalId\"]}\n```"
-          },
-          "response": []
-        },
-        {
-          "name": "2. Verify",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"claimText\": \"Para restablecer la contraseña de un usuario, un administrador entra a la consola y usa la opción de reenvío de invitación.\",\n  \"knowledgeBaseId\": \"{{kbId}}\"\n}",
-              "options": { "raw": { "language": "json" } }
-            },
-            "url": { "raw": "{{baseUrl}}/api/v1/agent/verify", "host": ["{{baseUrl}}"], "path": ["api", "v1", "agent", "verify"] },
-            "description": "Juzga si una afirmación está **fundamentada** en la KB. Es el paso que ningún framework de agentes te da: la respuesta la generó tu modelo, y esto dice si se puede mandar.\n\nDevuelve `verdict` (`supported` / `unsupported` / `contradicted`), `confidence` y `riskScore`, ambos en `[0, 1]`.\n\nTres cosas que conviene saber antes de leer el resultado:\n\n- **`claimText` topa en 4000 caracteres.** No se trunca del lado del cliente: un veredicto sobre los primeros 4000 no cubriría lo que el agente va a enviar.\n- **No le pases `articleIds` salvo que sepas por qué.** Planta un filtro que el carril de grafo rechaza; `verify` hace su propia recuperación.\n- **Recupera a visibilidad interna** sea cual sea el alcance de tu key, así que la evidencia que devuelve puede incluir contenido que esa key no vería por otras vías. Tratala como interna.\n\n```sq-test\n{\"scopes\":[\"agent.verify\",\"rag.query\"],\"persists\":null,\"spendsCredits\":true}\n```"
-          },
-          "response": []
-        },
-        {
-          "name": "3. Query (Sequentia sintetiza)",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"query\": \"¿cómo restablezco la contraseña de un usuario?\",\n  \"knowledgeBaseIds\": [\"{{kbId}}\"],\n  \"options\": {\n    \"maxResults\": 5,\n    \"includeProvenance\": true\n  }\n}",
-              "options": { "raw": { "language": "json" } }
-            },
-            "url": { "raw": "{{baseUrl}}/api/v1/agent/query", "host": ["{{baseUrl}}"], "path": ["api", "v1", "agent", "query"] },
-            "description": "La alternativa **gestionada**: Sequentia recupera *y* sintetiza. Está acá **como contraste**, no como recomendación: sirve para ver, en la misma corrida, qué aporta el carril propio.\n\nEl cuerpo no se parece al de `Retrieve`, y el esquema es estricto:\n\n- el campo es **`knowledgeBaseIds`, un array** (de 1 a 10, sin repetidos). Mandar `knowledgeBaseId` en singular es un `400`;\n- `options.maxResults` topa en **20**, no en 50.\n\nAl leer la respuesta: `answer` viene en `null` exactamente cuando `evidence` es `none`, y eso es un **200**, no un error. Y `citations` puede venir no vacío con `evidence: none`, así que para saber si se sirvió algo hay que mirar `sources` / `evidence`, nunca la cantidad de citas.\n\n```sq-test\n{\"scopes\":[\"agent.query\",\"rag.query\"],\"persists\":null,\"spendsCredits\":true,\"internalRead\":true}\n```"
-          },
-          "response": []
-        },
-        {
-          "name": "4. Index status",
-          "request": {
-            "method": "GET",
-            "header": [{ "key": "Accept", "value": "application/json" }],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/agent/index-status/{{kbId}}",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "agent", "index-status", "{{kbId}}"]
-            },
-            "description": "Cuánto de la KB está indexado. Es la respuesta a «recuperé menos de lo que esperaba»: si todavía está indexando, no falta contenido, falta tiempo.\n\nLa única `GET` del carril, y la única que no cuesta nada.\n\n```sq-test\n{\"scopes\":[\"agent.index_status\",\"kb.read\"],\"persists\":null,\"spendsCredits\":false}\n```"
-          },
-          "response": []
-        },
-        {
-          "name": "5. Gap report  ⚠ escribe",
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" },
-              {
-                "key": "x-idempotency-key",
-                "value": "postman-gap-{{kbId}}-contrasena",
-                "description": "La clave tiene que cubrir EXACTAMENTE lo mismo que el cuerpo. Más estrecha devuelve 409 durante 24 h; más ancha suprime observaciones que el contador de ocurrencias cuenta."
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"knowledgeBaseId\": \"{{kbId}}\",\n  \"gaps\": [\n    {\n      \"query\": \"¿cómo restablezco la contraseña de un usuario?\",\n      \"context\": \"Reportado desde la colección Postman de ejemplo.\",\n      \"priority\": \"low\"\n    }\n  ]\n}",
-              "options": { "raw": { "language": "json" } }
-            },
-            "url": { "raw": "{{baseUrl}}/api/v1/agent/gap-report", "host": ["{{baseUrl}}"], "path": ["api", "v1", "agent", "gap-report"] },
-            "description": "⚠ **PERSISTE.** Reporta que la KB no cubre algo. Deja una fila en la cola de triage de tu workspace, que alguien va a ver. **No hay petición de limpieza**: quitarla es trabajo de Admin Studio.\n\nDe fábrica reporta un hueco de ejemplo con `priority: low`. Cambiá el texto o no la corras.\n\nLa cabecera `x-idempotency-key` hace que reintentar no duplique: la ventana es de **24 horas**, y un mismo valor con un cuerpo distinto devuelve `409`.\n\n```sq-test\n{\"scopes\":[\"agent.gap_report\",\"gaps.write\"],\"persists\":\"una fila de hueco de conocimiento en la cola de triage\",\"spendsCredits\":false}\n```"
-          },
-          "response": []
-        },
-        {
-          "name": "6. Feedback  ⚠ escribe",
+          "response": [],
           "event": [
             {
               "listen": "prerequest",
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "// Tres guardas, y ninguna es cosmética: las tres evitan escribir una fila",
-                  "// que después nadie puede distinguir de una buena.",
-                  "const rid = pm.collectionVariables.get('retrievalId');",
+                  "// Every URL-PATH variable this request interpolates, checked before the",
+                  "// request is sent. An empty one does not fail loudly on this server: it",
+                  "// runs Express with non-strict routing, so `/knowledge-bases/` reaches the",
+                  "// LIST handler and answers 200 with a collection — which a status-only",
+                  "// assertion calls a pass, and an unfinished setup then looks finished.",
+                  "const __pathVars = [\"kbId\"];",
+                  "for (var __i = 0; __i < __pathVars.length; __i++) {",
+                  "    var __name = __pathVars[__i];",
+                  "    if (pm.variables.get(__name)) { continue; }",
+                  "    if (pm.execution && typeof pm.execution.skipRequest === 'function') {",
+                  "        pm.execution.skipRequest();",
+                  "    }",
+                  "    throw new Error('{{' + __name + '}} is empty — fill it in the environment (the collection description says where each value comes from) before running this request');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List / search articles",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/articles?q=&limit=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "knowledge-bases",
+                "{{kbId}}",
+                "articles"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "",
+                  "description": "optional full-text filter — empty lists everything"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "Article ROWS, not RAG chunks: this is a listing endpoint with a lexical filter, not the retrieval pipeline. For retrieval use the Agent API folder.\n\n**Scope:** `kb.search`\n\n```sq-test\n{\"scopes\":[\"kb.search\"],\"persists\":null,\"spendsCredits\":false,\"auth\":true,\"internalRead\":false,\"captures\":[\"articleId\"],\"transport\":\"rest\"}\n```"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Every URL-PATH variable this request interpolates, checked before the",
+                  "// request is sent. An empty one does not fail loudly on this server: it",
+                  "// runs Express with non-strict routing, so `/knowledge-bases/` reaches the",
+                  "// LIST handler and answers 200 with a collection — which a status-only",
+                  "// assertion calls a pass, and an unfinished setup then looks finished.",
+                  "const __pathVars = [\"kbId\"];",
+                  "for (var __i = 0; __i < __pathVars.length; __i++) {",
+                  "    var __name = __pathVars[__i];",
+                  "    if (pm.variables.get(__name)) { continue; }",
+                  "    if (pm.execution && typeof pm.execution.skipRequest === 'function') {",
+                  "        pm.execution.skipRequest();",
+                  "    }",
+                  "    throw new Error('{{' + __name + '}} is empty — fill it in the environment (the collection description says where each value comes from) before running this request');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});",
                   "",
-                  "// 1. Sin id. El campo es OPCIONAL en el esquema, así que un vacío se acepta",
-                  "//    y la fila se escribe igual, ligada a nada, sesgando en silencio la",
-                  "//    analítica de utilidad.",
-                  "if (!rid) {",
-                  "  throw new Error('Sin retrievalId: corré primero «Agent API / 1. Retrieve». El campo es opcional en el esquema, así que un vacío se aceptaría y escribiría una fila ligada a nada.');",
+                  "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                  "const body = ok ? pm.response.json() : {};",
+                  "const value = body?.articles?.[0]?.id || '';",
+                  "const producer = \"List / search articles\";",
+                  "const wroteItLast = pm.collectionVariables.get('articleIdSource') || '';",
+                  "if (ok && value) {",
+                  "    pm.collectionVariables.set('articleId', value);",
+                  "    pm.collectionVariables.set('articleIdSource', producer);",
+                  "    pm.collectionVariables.set('articleIdAt', String(Date.now()));",
+                  "let producedFor = '';",
+                  "const sentBody = pm.variables.replaceIn(pm.request.body?.raw || '');",
+                  "try {",
+                  "    const parsed = JSON.parse(sentBody);",
+                  "    const many = Array.isArray(parsed.knowledgeBaseIds) ? parsed.knowledgeBaseIds : [];",
+                  "    producedFor = many.length ? many.join(',') : (parsed.knowledgeBaseId || '');",
+                  "} catch (e) {",
+                  "    producedFor = '';",
+                  "}",
+                  "if (!producedFor) {",
+                  "    // A GET, or a body without one. The URL path carries it there — and it",
+                  "    // is a template too, for the same reason.",
+                  "    const sentUrl = pm.variables.replaceIn(String(pm.request.url));",
+                  "    const m = sentUrl.match(/knowledge-bases\\/([^/?]+)/);",
+                  "    producedFor = m ? m[1] : (pm.variables.get('kbId') || '');",
+                  "}",
+                  "    pm.collectionVariables.set('articleIdKb', producedFor);",
+                  "} else if (wroteItLast === producer || wroteItLast === '') {",
+                  "    // Ours to clear, or nobody's. Either way no sibling loses a good value.",
+                  "    pm.collectionVariables.set('articleId', '');",
+                  "    pm.collectionVariables.set('articleIdSource', '');",
+                  "    pm.collectionVariables.set('articleIdAt', '');",
+                  "    pm.collectionVariables.set('articleIdKb', '');",
+                  "} else {",
+                  "    console.log('kept {{articleId}} from ' + wroteItLast + ' — this request did not write it');",
+                  "}",
+                  "const articleId = body?.articles?.[0]?.id || '';",
+                  "if (ok) {",
+                  "    pm.test('captured articleId for the requests that use it', function () {",
+                  "        pm.expect(articleId, 'no articles.0.id in this response — {{articleId}} is empty and the requests using it will read the wrong route').to.not.equal('');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get article",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/articles/{{articleId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "knowledge-bases",
+                "{{kbId}}",
+                "articles",
+                "{{articleId}}"
+              ]
+            },
+            "description": "\n**Scope:** `articles.read`\n\n```sq-test\n{\"scopes\":[\"articles.read\"],\"persists\":null,\"spendsCredits\":false,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"rest\"}\n```"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Every URL-PATH variable this request interpolates, checked before the",
+                  "// request is sent. An empty one does not fail loudly on this server: it",
+                  "// runs Express with non-strict routing, so `/knowledge-bases/` reaches the",
+                  "// LIST handler and answers 200 with a collection — which a status-only",
+                  "// assertion calls a pass, and an unfinished setup then looks finished.",
+                  "const __pathVars = [\"kbId\",\"articleId\"];",
+                  "for (var __i = 0; __i < __pathVars.length; __i++) {",
+                  "    var __name = __pathVars[__i];",
+                  "    if (pm.variables.get(__name)) { continue; }",
+                  "    if (pm.execution && typeof pm.execution.skipRequest === 'function') {",
+                  "        pm.execution.skipRequest();",
+                  "    }",
+                  "    throw new Error('{{' + __name + '}} is empty — fill it in the environment (the collection description says where each value comes from) before running this request');",
                   "}",
                   "",
-                  "// 2. Id viejo. Diez minutos es la política de esta colección, no del servidor.",
-                  "const at = Number(pm.collectionVariables.get('retrievalIdAt'));",
-                  "if (at && Date.now() - at > 10 * 60 * 1000) {",
-                  "  throw new Error('El retrievalId tiene más de diez minutos. Volvé a correr «1. Retrieve» antes de calificar.');",
+                  "const value = pm.collectionVariables.get('articleId');",
+                  "const capturedAt = Number(pm.collectionVariables.get('articleIdAt') || 0);",
+                  "const stale = capturedAt > 0 && Date.now() - capturedAt > 600000;",
+                  "const capturedKb = pm.collectionVariables.get('articleIdKb') || '';",
+                  "let currentKb = '';",
+                  "const sentBody = pm.variables.replaceIn(pm.request.body?.raw || '');",
+                  "try {",
+                  "    const parsed = JSON.parse(sentBody);",
+                  "    const many = Array.isArray(parsed.knowledgeBaseIds) ? parsed.knowledgeBaseIds : [];",
+                  "    currentKb = many.length === 1 ? many[0] : (parsed.knowledgeBaseId || '');",
+                  "} catch (e) {",
+                  "    currentKb = '';",
+                  "}",
+                  "if (!currentKb) {",
+                  "    // A GET, or a body without one. The URL path carries it there — and it",
+                  "    // is a template too, for the same reason.",
+                  "    const sentUrl = pm.variables.replaceIn(String(pm.request.url));",
+                  "    const m = sentUrl.match(/knowledge-bases\\/([^/?]+)/);",
+                  "    currentKb = m ? m[1] : (pm.variables.get('kbId') || '');",
+                  "}",
+                  "const producedForKbs = capturedKb ? capturedKb.split(',') : [];",
+                  "const wrongKb = value && producedForKbs.length && currentKb && producedForKbs.indexOf(currentKb) === -1;",
+                  "if (wrongKb) {",
+                  "    // A THIRD way the value can be wrong, and the quietest: it is fresh,",
+                  "    // it was written by the right request, and it belongs to another KB.",
+                  "    // The handler writes the row under the body's `knowledgeBaseId`",
+                  "    // without checking the pairing, so this succeeds and lands a rating",
+                  "    // in an analytics dashboard the retrieval never touched.",
+                  "    if (pm.execution && typeof pm.execution.skipRequest === 'function') {",
+                  "        pm.execution.skipRequest();",
+                  "    }",
+                  "    throw new Error('{{articleId}} was captured against ' + capturedKb + ', but {{kbId}} is now ' + currentKb + ' — re-run the request that produces it');",
+                  "}",
+                  "if (stale) {",
+                  "    // Not the same defect as an empty value, so not the same message: the",
+                  "    // variable IS set, and sending would file this against a retrieval from",
+                  "    // a previous sitting.",
+                  "    if (pm.execution && typeof pm.execution.skipRequest === 'function') {",
+                  "        pm.execution.skipRequest();",
+                  "    }",
+                  "    throw new Error('{{articleId}} was captured more than 10 minutes ago — re-run the request that produces it');",
+                  "}",
+                  "if (!value) {",
+                  "    // `skipRequest` is the documented way to NOT SEND. Throwing only",
+                  "    // fails script evaluation, which the runtime does not have to treat",
+                  "    // as a skip — so on its own it left the request able to go out, which",
+                  "    // is the whole thing this guard exists to prevent.",
+                  "    if (pm.execution && typeof pm.execution.skipRequest === 'function') {",
+                  "        pm.execution.skipRequest();",
+                  "    }",
+                  "    // And the throw stays, as the reason AND as the fallback on a runtime",
+                  "    // old enough not to have `skipRequest`, where aborting the script was",
+                  "    // the only lever there was.",
+                  "    throw new Error('{{articleId}} is empty — run List / search articles first, and check it returned something. An empty value sends /articles/, which reaches the LIST route and answers 200 with the wrong payload.');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Query knowledge base (lexical)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/query",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "knowledge-bases",
+                "{{kbId}}",
+                "query"
+              ]
+            },
+            "description": "Lexical search over the KB's PUBLISHED ARTICLES — ranked article hits, no chunk retrieval and no generated answer. The response names the lane (`lane: \"articles-lexical\"`) and the pool it searched (`searchedArticles`); when `results` is empty, `noResultsReason` says why: `no_searchable_articles` (the KB has no published articles for this lane — a Document KB looks like this, and so does a PRIVATE article KB whose articles are all audience-scoped; for a Document KB use Agent → Retrieve, which applies the same visibility rules: `kb.read_internal` to see a private KB's chunks, and on a private KB audience-scoped content stays hidden there too — audience labels do not restrict reads on an anonymously public KB), `query_not_searchable` (the lane refuses the query: no positive term, or an unrestricted `OR -term` shape like `data OR -quota`) or `no_match`.\n\nNeeds the agentic API module (Team plan or above) on top of the scope — without it this answers 402 while the rest of this folder keeps working.\n\n**Scope:** `rag.query`\n\n```sq-test\n{\"scopes\":[\"rag.query\"],\"persists\":null,\"spendsCredits\":false,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"rest\"}\n```",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"how do I reset a password?\",\n  \"maxResults\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Every URL-PATH variable this request interpolates, checked before the",
+                  "// request is sent. An empty one does not fail loudly on this server: it",
+                  "// runs Express with non-strict routing, so `/knowledge-bases/` reaches the",
+                  "// LIST handler and answers 200 with a collection — which a status-only",
+                  "// assertion calls a pass, and an unfinished setup then looks finished.",
+                  "const __pathVars = [\"kbId\"];",
+                  "for (var __i = 0; __i < __pathVars.length; __i++) {",
+                  "    var __name = __pathVars[__i];",
+                  "    if (pm.variables.get(__name)) { continue; }",
+                  "    if (pm.execution && typeof pm.execution.skipRequest === 'function') {",
+                  "        pm.execution.skipRequest();",
+                  "    }",
+                  "    throw new Error('{{' + __name + '}} is empty — fill it in the environment (the collection description says where each value comes from) before running this request');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Analytics summary",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/analytics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "knowledge-bases",
+                "{{kbId}}",
+                "analytics"
+              ]
+            },
+            "description": "\n**Scope:** `analytics.read`\n\n```sq-test\n{\"scopes\":[\"analytics.read\"],\"persists\":null,\"spendsCredits\":false,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"rest\"}\n```"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Every URL-PATH variable this request interpolates, checked before the",
+                  "// request is sent. An empty one does not fail loudly on this server: it",
+                  "// runs Express with non-strict routing, so `/knowledge-bases/` reaches the",
+                  "// LIST handler and answers 200 with a collection — which a status-only",
+                  "// assertion calls a pass, and an unfinished setup then looks finished.",
+                  "const __pathVars = [\"kbId\"];",
+                  "for (var __i = 0; __i < __pathVars.length; __i++) {",
+                  "    var __name = __pathVars[__i];",
+                  "    if (pm.variables.get(__name)) { continue; }",
+                  "    if (pm.execution && typeof pm.execution.skipRequest === 'function') {",
+                  "        pm.execution.skipRequest();",
+                  "    }",
+                  "    throw new Error('{{' + __name + '}} is empty — fill it in the environment (the collection description says where each value comes from) before running this request');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Knowledge gaps",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/gaps",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "knowledge-bases",
+                "{{kbId}}",
+                "gaps"
+              ]
+            },
+            "description": "Questions users asked that the KB could not answer.\n\n**Scope:** `gaps.read`\n\n```sq-test\n{\"scopes\":[\"gaps.read\"],\"persists\":null,\"spendsCredits\":false,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"rest\"}\n```"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Every URL-PATH variable this request interpolates, checked before the",
+                  "// request is sent. An empty one does not fail loudly on this server: it",
+                  "// runs Express with non-strict routing, so `/knowledge-bases/` reaches the",
+                  "// LIST handler and answers 200 with a collection — which a status-only",
+                  "// assertion calls a pass, and an unfinished setup then looks finished.",
+                  "const __pathVars = [\"kbId\"];",
+                  "for (var __i = 0; __i < __pathVars.length; __i++) {",
+                  "    var __name = __pathVars[__i];",
+                  "    if (pm.variables.get(__name)) { continue; }",
+                  "    if (pm.execution && typeof pm.execution.skipRequest === 'function') {",
+                  "        pm.execution.skipRequest();",
+                  "    }",
+                  "    throw new Error('{{' + __name + '}} is empty — fill it in the environment (the collection description says where each value comes from) before running this request');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Agent API",
+      "item": [
+        {
+          "name": "Query (Sequentia synthesises)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/agent/query",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "agent",
+                "query"
+              ]
+            },
+            "description": "Retrieval AND synthesis, with citations and provenance.\n\n`knowledgeBaseIds` is a LIST — the schema is strict and rejects a singular `knowledgeBaseId`, along with any other unknown key.\n\n`includeGraphContext` only applies when querying a single KB.\n\nNo evidence is a 200, not an error: `answer` is `null`, `evidence` is `none` and `message` carries the localised copy. Read \"was anything served?\" from `sources` / `evidence`, never from `citations`, which also carries graph entities and can be non-empty when nothing was served.\n\nStreaming is NOT available here despite what older docs suggest: there is no `text/event-stream` branch on this route.\n\n**Scope:** `agent.query (or rag.query)`\n\n```sq-test\n{\"scopes\":[\"agent.query\",\"rag.query\"],\"persists\":null,\"spendsCredits\":true,\"auth\":true,\"internalRead\":true,\"captures\":[\"retrievalId\"],\"transport\":\"rest\"}\n```",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"how do I reset a user's password?\",\n  \"knowledgeBaseIds\": [\n    \"{{kbId}}\"\n  ],\n  \"options\": {\n    \"maxResults\": 5,\n    \"includeProvenance\": true,\n    \"includeGraphContext\": true,\n    \"graphOptions\": {\n      \"maxHops\": 2,\n      \"minConfidence\": 0.3\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                  "const body = ok ? pm.response.json() : {};",
+                  "const value = body.retrievalId || '';",
+                  "const producer = \"Query (Sequentia synthesises)\";",
+                  "const wroteItLast = pm.collectionVariables.get('retrievalIdSource') || '';",
+                  "if (ok && value) {",
+                  "    pm.collectionVariables.set('retrievalId', value);",
+                  "    pm.collectionVariables.set('retrievalIdSource', producer);",
+                  "    pm.collectionVariables.set('retrievalIdAt', String(Date.now()));",
+                  "let producedFor = '';",
+                  "const sentBody = pm.variables.replaceIn(pm.request.body?.raw || '');",
+                  "try {",
+                  "    const parsed = JSON.parse(sentBody);",
+                  "    const many = Array.isArray(parsed.knowledgeBaseIds) ? parsed.knowledgeBaseIds : [];",
+                  "    producedFor = many.length ? many.join(',') : (parsed.knowledgeBaseId || '');",
+                  "} catch (e) {",
+                  "    producedFor = '';",
+                  "}",
+                  "if (!producedFor) {",
+                  "    // A GET, or a body without one. The URL path carries it there — and it",
+                  "    // is a template too, for the same reason.",
+                  "    const sentUrl = pm.variables.replaceIn(String(pm.request.url));",
+                  "    const m = sentUrl.match(/knowledge-bases\\/([^/?]+)/);",
+                  "    producedFor = m ? m[1] : (pm.variables.get('kbId') || '');",
+                  "}",
+                  "    pm.collectionVariables.set('retrievalIdKb', producedFor);",
+                  "} else if (wroteItLast === producer || wroteItLast === '') {",
+                  "    // Ours to clear, or nobody's. Either way no sibling loses a good value.",
+                  "    pm.collectionVariables.set('retrievalId', '');",
+                  "    pm.collectionVariables.set('retrievalIdSource', '');",
+                  "    pm.collectionVariables.set('retrievalIdAt', '');",
+                  "    pm.collectionVariables.set('retrievalIdKb', '');",
+                  "} else {",
+                  "    console.log('kept {{retrievalId}} from ' + wroteItLast + ' — this request did not write it');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Retrieve (bring your own LLM)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/agent/retrieve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "agent",
+                "retrieve"
+              ]
+            },
+            "description": "Chunks with provenance and no synthesis — the endpoint for pipelines that generate the answer themselves.\n\nNote `knowledgeBaseId` is SINGULAR here, unlike `/query`.\n\nTwo response fields are easy to misread. `relevanceScore` is `null` when the retriever emitted no similarity — that is \"unknown\", not \"irrelevant\" — and its range is [-1, 1] (`1 - cosineDistance`, never thresholded), so a legitimate weak hit can be negative. And `provenance` is discriminated by `type`: a Document-KB chunk carries `document` (with page numbers) instead of `article`.\n\n**Scope:** `agent.retrieve (or rag.query)`\n\n```sq-test\n{\"scopes\":[\"agent.retrieve\",\"rag.query\"],\"persists\":null,\"spendsCredits\":true,\"auth\":true,\"internalRead\":true,\"captures\":[\"retrievalId\"],\"transport\":\"rest\"}\n```",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"how do I reset a user's password?\",\n  \"knowledgeBaseId\": \"{{kbId}}\",\n  \"maxResults\": 8,\n  \"includeContent\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                  "const body = ok ? pm.response.json() : {};",
+                  "const value = body.retrievalId || '';",
+                  "const producer = \"Retrieve (bring your own LLM)\";",
+                  "const wroteItLast = pm.collectionVariables.get('retrievalIdSource') || '';",
+                  "if (ok && value) {",
+                  "    pm.collectionVariables.set('retrievalId', value);",
+                  "    pm.collectionVariables.set('retrievalIdSource', producer);",
+                  "    pm.collectionVariables.set('retrievalIdAt', String(Date.now()));",
+                  "let producedFor = '';",
+                  "const sentBody = pm.variables.replaceIn(pm.request.body?.raw || '');",
+                  "try {",
+                  "    const parsed = JSON.parse(sentBody);",
+                  "    const many = Array.isArray(parsed.knowledgeBaseIds) ? parsed.knowledgeBaseIds : [];",
+                  "    producedFor = many.length ? many.join(',') : (parsed.knowledgeBaseId || '');",
+                  "} catch (e) {",
+                  "    producedFor = '';",
+                  "}",
+                  "if (!producedFor) {",
+                  "    // A GET, or a body without one. The URL path carries it there — and it",
+                  "    // is a template too, for the same reason.",
+                  "    const sentUrl = pm.variables.replaceIn(String(pm.request.url));",
+                  "    const m = sentUrl.match(/knowledge-bases\\/([^/?]+)/);",
+                  "    producedFor = m ? m[1] : (pm.variables.get('kbId') || '');",
+                  "}",
+                  "    pm.collectionVariables.set('retrievalIdKb', producedFor);",
+                  "} else if (wroteItLast === producer || wroteItLast === '') {",
+                  "    // Ours to clear, or nobody's. Either way no sibling loses a good value.",
+                  "    pm.collectionVariables.set('retrievalId', '');",
+                  "    pm.collectionVariables.set('retrievalIdSource', '');",
+                  "    pm.collectionVariables.set('retrievalIdAt', '');",
+                  "    pm.collectionVariables.set('retrievalIdKb', '');",
+                  "} else {",
+                  "    console.log('kept {{retrievalId}} from ' + wroteItLast + ' — this request did not write it');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify a claim",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/agent/verify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "agent",
+                "verify"
+              ]
+            },
+            "description": "Is this claim grounded in the KB? Returns `verdict` (supported / unsupported / contradicted), `confidence`, `riskScore`, the supporting citations and any contradictory sources.\n\nThe body schema is strict: only `claimText`, `knowledgeBaseId` and an optional `articleIds`.\n\nSequentia returns the verdict; it cannot stop an external agent from sending anyway. Acting on it is an integration requirement.\n\n**Scope:** `agent.verify (or rag.query)`\n\n```sq-test\n{\"scopes\":[\"agent.verify\",\"rag.query\"],\"persists\":null,\"spendsCredits\":true,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"rest\"}\n```",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"claimText\": \"Password reset links expire after 30 minutes.\",\n  \"knowledgeBaseId\": \"{{kbId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Feedback",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/agent/feedback",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "agent",
+                "feedback"
+              ]
+            },
+            "description": "Closes the quality loop. `retrievalId` ties the feedback back to the retrieval that produced it — the Retrieve and Query requests in this folder save theirs into `{{retrievalId}}` automatically.\n\n`reason` is bounded at 64 characters. This scope has no fallback: `agent.feedback` is the only way in.\n\n**Scope:** `agent.feedback`\n\n```sq-test\n{\"scopes\":[\"agent.feedback\"],\"persists\":\"a helpfulness-feedback row against the captured `retrievalId`, which feeds the KB's analytics\",\"spendsCredits\":false,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"rest\"}\n```",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"knowledgeBaseId\": \"{{kbId}}\",\n  \"rating\": \"helpful\",\n  \"retrievalId\": \"{{retrievalId}}\",\n  \"reason\": \"verify_supported\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const value = pm.collectionVariables.get('retrievalId');",
+                  "const capturedAt = Number(pm.collectionVariables.get('retrievalIdAt') || 0);",
+                  "const stale = capturedAt > 0 && Date.now() - capturedAt > 600000;",
+                  "const capturedKb = pm.collectionVariables.get('retrievalIdKb') || '';",
+                  "let currentKb = '';",
+                  "const sentBody = pm.variables.replaceIn(pm.request.body?.raw || '');",
+                  "try {",
+                  "    const parsed = JSON.parse(sentBody);",
+                  "    const many = Array.isArray(parsed.knowledgeBaseIds) ? parsed.knowledgeBaseIds : [];",
+                  "    currentKb = many.length === 1 ? many[0] : (parsed.knowledgeBaseId || '');",
+                  "} catch (e) {",
+                  "    currentKb = '';",
+                  "}",
+                  "if (!currentKb) {",
+                  "    // A GET, or a body without one. The URL path carries it there — and it",
+                  "    // is a template too, for the same reason.",
+                  "    const sentUrl = pm.variables.replaceIn(String(pm.request.url));",
+                  "    const m = sentUrl.match(/knowledge-bases\\/([^/?]+)/);",
+                  "    currentKb = m ? m[1] : (pm.variables.get('kbId') || '');",
+                  "}",
+                  "const producedForKbs = capturedKb ? capturedKb.split(',') : [];",
+                  "const wrongKb = value && producedForKbs.length && currentKb && producedForKbs.indexOf(currentKb) === -1;",
+                  "if (wrongKb) {",
+                  "    // A THIRD way the value can be wrong, and the quietest: it is fresh,",
+                  "    // it was written by the right request, and it belongs to another KB.",
+                  "    // The handler writes the row under the body's `knowledgeBaseId`",
+                  "    // without checking the pairing, so this succeeds and lands a rating",
+                  "    // in an analytics dashboard the retrieval never touched.",
+                  "    if (pm.execution && typeof pm.execution.skipRequest === 'function') {",
+                  "        pm.execution.skipRequest();",
+                  "    }",
+                  "    throw new Error('{{retrievalId}} was captured against ' + capturedKb + ', but {{kbId}} is now ' + currentKb + ' — re-run the request that produces it');",
+                  "}",
+                  "if (stale) {",
+                  "    // Not the same defect as an empty value, so not the same message: the",
+                  "    // variable IS set, and sending would file this against a retrieval from",
+                  "    // a previous sitting.",
+                  "    if (pm.execution && typeof pm.execution.skipRequest === 'function') {",
+                  "        pm.execution.skipRequest();",
+                  "    }",
+                  "    throw new Error('{{retrievalId}} was captured more than 10 minutes ago — re-run the request that produces it');",
+                  "}",
+                  "if (!value) {",
+                  "    // `skipRequest` is the documented way to NOT SEND. Throwing only",
+                  "    // fails script evaluation, which the runtime does not have to treat",
+                  "    // as a skip — so on its own it left the request able to go out, which",
+                  "    // is the whole thing this guard exists to prevent.",
+                  "    if (pm.execution && typeof pm.execution.skipRequest === 'function') {",
+                  "        pm.execution.skipRequest();",
+                  "    }",
+                  "    // And the throw stays, as the reason AND as the fallback on a runtime",
+                  "    // old enough not to have `skipRequest`, where aborting the script was",
+                  "    // the only lever there was.",
+                  "    throw new Error('{{retrievalId}} is empty — run Query or Retrieve first. Sending feedback without one still writes a row, unlinked to any retrieval, which quietly skews the helpfulness analytics.');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Report a knowledge gap",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/agent/gap-report",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "agent",
+                "gap-report"
+              ]
+            },
+            "description": "Records questions the agent could not answer, deduplicated server-side. Mint the key with `gaps.write`: the dedicated `agent.gap_report` scope exists but is deliberately not mintable, because the fallback already makes the endpoint reachable.\n\n**Scope:** `gaps.write (agent.gap_report is not mintable)`\n\n```sq-test\n{\"scopes\":[\"gaps.write\",\"agent.gap_report\"],\"persists\":\"a knowledge-gap row in the KB's gap queue, visible to whoever triages it\",\"spendsCredits\":false,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"rest\"}\n```",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"knowledgeBaseId\": \"{{kbId}}\",\n  \"gaps\": [\n    {\n      \"query\": \"how do I export the audit log?\",\n      \"context\": \"asked twice this week, no article covers it\",\n      \"priority\": \"medium\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Index status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/agent/index-status/{{kbId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "agent",
+                "index-status",
+                "{{kbId}}"
+              ]
+            },
+            "description": "Is the KB's index current? Same mintability note as gap-report.\n\n**Scope:** `kb.read (agent.index_status is not mintable)`\n\n```sq-test\n{\"scopes\":[\"kb.read\",\"agent.index_status\"],\"persists\":null,\"spendsCredits\":false,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"rest\"}\n```"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Every URL-PATH variable this request interpolates, checked before the",
+                  "// request is sent. An empty one does not fail loudly on this server: it",
+                  "// runs Express with non-strict routing, so `/knowledge-bases/` reaches the",
+                  "// LIST handler and answers 200 with a collection — which a status-only",
+                  "// assertion calls a pass, and an unfinished setup then looks finished.",
+                  "const __pathVars = [\"kbId\"];",
+                  "for (var __i = 0; __i < __pathVars.length; __i++) {",
+                  "    var __name = __pathVars[__i];",
+                  "    if (pm.variables.get(__name)) { continue; }",
+                  "    if (pm.execution && typeof pm.execution.skipRequest === 'function') {",
+                  "        pm.execution.skipRequest();",
+                  "    }",
+                  "    throw new Error('{{' + __name + '}} is empty — fill it in the environment (the collection description says where each value comes from) before running this request');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Ingest (iPaaS)",
+      "item": [
+        {
+          "name": "Create a draft article",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ipaas/drafts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "ipaas",
+                "drafts"
+              ]
+            },
+            "description": "The ONLY public endpoint that writes content. It creates a DRAFT and runs it through the ingestion pipeline in import-as-is mode; it does not publish.\n\nThere is no public endpoint for uploading DOCUMENTS to a Document KB — that lane is session-authenticated under /api/v2, so it is driven from Admin Studio or a connector, not from an API key.\n\n**Scope:** `articles.write`\n\n```sq-test\n{\"scopes\":[\"articles.write\"],\"persists\":\"a DRAFT article in the KB — unpublished, but real content someone has to delete\",\"spendsCredits\":true,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"rest\"}\n```",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"knowledgeBaseId\": \"{{kbId}}\",\n  \"title\": \"How to reset a password\",\n  \"content\": \"# How to reset a password\\n\\nOpen Admin > Users…\",\n  \"excerpt\": \"Resetting a user's password from Admin Studio.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Search articles",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ipaas/search",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "ipaas",
+                "search"
+              ]
+            },
+            "description": "\n**Scope:** `kb.read`\n\n```sq-test\n{\"scopes\":[\"kb.read\"],\"persists\":null,\"spendsCredits\":false,\"auth\":true,\"internalRead\":true,\"captures\":[],\"transport\":\"rest\"}\n```",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"password\",\n  \"knowledgeBaseId\": \"{{kbId}}\",\n  \"limit\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List knowledge bases",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/ipaas/knowledge-bases",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "ipaas",
+                "knowledge-bases"
+              ]
+            },
+            "description": "\n**Scope:** `kb.read`\n\n```sq-test\n{\"scopes\":[\"kb.read\"],\"persists\":null,\"spendsCredits\":false,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"rest\"}\n```"
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "MCP",
+      "description": "The Model Context Protocol server, over Streamable HTTP. Run these in order: `initialize` returns an `mcp-session-id` response header that the rest of the folder reuses, and the session expires after 30 minutes idle, with 5 concurrent sessions per credential.\n\n**MCP has two rate ceilings, and which one bites depends on the key AND on the verb.** Every POST, GET and DELETE passes a 300 per minute limiter shared **per IP** and applied **before auth**. Only **POST** then checks a second one: `resolveToolRateLimit`/`checkToolRateLimit` are called from the POST handler alone, so the GET and DELETE routes — including this collection's *close the session* step — mount the transport limiter and `mcpAuth()` and nothing else. Throttled cleanup is therefore always the per-IP backstop, never the key's bucket. On POST the key's own `rateLimit`/`rateLimitWindow` applies — and a key minted through Admin Studio carries 1,000 per hour, because the mint route defaults both columns. The 60 per minute figure often quoted as \"the default\" is the FALLBACK `resolveToolRateLimit` uses only when a key has neither column set — a legacy or programmatically-created credential. So a `429` on the hourly bucket resets on a different clock from one on the per-IP backstop, and several agents behind one egress IP collect the second kind while looking like a bad key setting. These numbers are GENERATED from the constants that set them.\n\nResponses may arrive SSE-framed (`event: message` / `data: {…}`) rather than as plain JSON — that is the transport working, not an error.\n\nMost clients (Claude Desktop, Cursor, LangChain's MCP adapters) speak this for you; the folder is here to debug auth and tool arguments by hand. Admin Studio → MCP Server has copy-paste configs for those clients.",
+      "item": [
+        {
+          "name": "1. initialize",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              }
+            ],
+            "url": {
+              "raw": "{{mcpUrl}}",
+              "host": [
+                "{{mcpUrl}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 1,\n  \"method\": \"initialize\",\n  \"params\": {\n    \"protocolVersion\": \"2025-03-26\",\n    \"capabilities\": {},\n    \"clientInfo\": {\n      \"name\": \"postman\",\n      \"version\": \"1.0.0\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Opens the session. The id comes back in the `mcp-session-id` RESPONSE HEADER, not in the body; the test script stores it in `{{mcpSessionId}}`.\n\n**Refuses to send while `{{mcpSessionId}}` is set.** A second handshake would strand the first session — open server-side until its 30 min TTL, with the collection's only handle to it gone — and five of those exhaust the per-credential cap. Run *7. close the session* first; if that session has already expired, clear the variable by hand.\n\n**Scope:** any ONE of `rag.query`, `kb.read`, `agent.verify`, `agent.write_audit` or `agent.execute_action` — the `/mcp` entry gate, checked on every request before the handshake. A key with none of them answers 403 here rather than inside a `200`.\n\n```sq-test\n{\"scopes\":[\"rag.query\",\"kb.read\",\"agent.verify\",\"agent.write_audit\",\"agent.execute_action\"],\"persists\":null,\"spendsCredits\":false,\"auth\":true,\"internalRead\":false,\"captures\":[\"mcpSessionId\"],\"transport\":\"mcp\"}\n```"
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const value = pm.collectionVariables.get('mcpSessionId');",
+                  "if (value) {",
+                  "    if (pm.execution && typeof pm.execution.skipRequest === 'function') {",
+                  "        pm.execution.skipRequest();",
+                  "    }",
+                  "    throw new Error('{{mcpSessionId}} is already set — run 7 to close that session first, or clear the variable if it has already expired');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "const raw = pm.response.text();",
+                  "// Unwrap SSE framing when present; a plain JSON body passes through.",
+                  "// NOTE the escaped \\n: this string is JavaScript being GENERATED, so an",
+                  "// unescaped one would put a real newline inside the emitted string literal",
+                  "// and every MCP test would fail to parse.",
+                  "const frames = raw.split('\\n').filter((l) => l.startsWith('data:'));",
+                  "// The LAST frame, not all of them concatenated: a stream can carry a",
+                  "// notification before the response, and gluing two JSON documents",
+                  "// together parses as neither.",
+                  "const payload = (frames.length ? frames[frames.length - 1].slice(5) : raw).trim();",
+                  "",
+                  "// This request carries an `id`, so a body is REQUIRED.",
+                  "pm.test('a response body came back', function () {",
+                  "    pm.expect(payload, 'empty body for a request that carries an id').to.not.equal('');",
+                  "});",
+                  "",
+                  "if (payload !== '') {",
+                  "    const body = JSON.parse(payload);",
+                  "    pm.test('no JSON-RPC error', function () {",
+                  "        pm.expect(body.error, JSON.stringify(body.error)).to.be.undefined;",
+                  "    });",
+                  "    pm.test('the response answers THIS request', function () {",
+                  "        pm.expect(body.id, 'expected id 1, got ' + JSON.stringify(body.id) + ' — this is not the response to this request').to.eql(1);",
+                  "    });",
+                  "    pm.test('a result member came back', function () {",
+                  "        pm.expect(Object.prototype.hasOwnProperty.call(body, 'result'), 'no `result` and no `error` — a JSON-RPC response must carry one').to.equal(true);",
+                  "    });",
+                  "    pm.test('the tool itself did not fail', function () {",
+                  "        const result = body.result || {};",
+                  "        const text = (result.content || []).map((c) => c.text).join(' ');",
+                  "        pm.expect(result.isError, text).to.not.equal(true);",
+                  "    });",
                   "}",
                   "",
-                  "// 3. Id de OTRA KB. Es el caso más silencioso de los tres: el servidor",
-                  "//    escribe la fila con lo que diga el cuerpo, así que consultar la KB A,",
-                  "//    cambiar kbId a B y calificar FUNCIONA — y la calificación aterriza en",
-                  "//    un panel que esa recuperación nunca tocó.",
-                  "const kbCaptura = pm.collectionVariables.get('retrievalIdKb');",
-                  "const kbAhora = String(pm.variables.get('kbId') || '');",
-                  "if (kbCaptura && kbAhora && kbCaptura !== kbAhora) {",
-                  "  throw new Error('El retrievalId se capturó contra la KB ' + kbCaptura + ' y ahora kbId es ' + kbAhora + '. La calificación aterrizaría en una KB que esa recuperación nunca tocó.');",
+                  "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                  "const sessionId = (ok && pm.response.headers.get('mcp-session-id')) || '';",
+                  "if (ok) {",
+                  "    pm.test('session id returned', function () {",
+                  "        pm.expect(sessionId, 'no mcp-session-id header — the rest of this folder cannot run').to.not.equal('');",
+                  "    });",
+                  "    if (sessionId) {",
+                  "        const previous = pm.collectionVariables.get('mcpSessionId');",
+                  "        if (previous && previous !== sessionId) {",
+                  "            console.log('session ' + previous + ' was replaced without being closed — it stays open until its 30 min TTL and holds one of the five slots');",
+                  "        }",
+                  "        pm.collectionVariables.set('mcpSessionId', sessionId);",
+                  "    }",
+                  "} else {",
+                  "    // NOT cleared. A 401 or 429 here opens nothing, so any id already",
+                  "    // stored still names a LIVE session — and it is the only handle the",
+                  "    // folder has for closing it. Wiping it stranded that session until",
+                  "    // its TTL and burned one of the five, which is the failure this",
+                  "    // folder's DELETE exists to prevent.",
+                  "    console.log('initialize refused (' + pm.response.code + ') — keeping any existing session id so it can still be closed');",
                   "}"
                 ]
               }
             }
           ],
+          "response": []
+        },
+        {
+          "name": "2. notifications/initialized",
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Accept", "value": "application/json" },
-              { "key": "Content-Type", "value": "application/json" },
-              { "key": "x-idempotency-key", "value": "postman-feedback-{{retrievalId}}" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcpSessionId}}"
+              }
             ],
+            "url": {
+              "raw": "{{mcpUrl}}",
+              "host": [
+                "{{mcpUrl}}"
+              ]
+            },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"knowledgeBaseId\": \"{{kbId}}\",\n  \"retrievalId\": \"{{retrievalId}}\",\n  \"rating\": \"helpful\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"method\": \"notifications/initialized\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
-            "url": { "raw": "{{baseUrl}}/api/v1/agent/feedback", "host": ["{{baseUrl}}"], "path": ["api", "v1", "agent", "feedback"] },
-            "description": "⚠ **PERSISTE.** Califica una recuperación. Deja una fila de feedback que alimenta la analítica de la KB, y **no hay petición de limpieza**.\n\nNo es un paso del bucle: se manda **aparte**, cuando un humano ya leyó la respuesta. Correrlo dentro del bucle mintearía una recuperación nueva y calificaría ésa.\n\nUsa el `retrievalId` que capturó «1. Retrieve», y **se niega a enviar** si falta, si tiene más de diez minutos, o si se capturó contra otra KB. Las tres guardas están en el script de pre-request, con el motivo de cada una.\n\n`rating` solo acepta `helpful` o `not_helpful`.\n\n**Es el único endpoint del carril sin scope de reserva:** `agent.feedback` es la única cadena que lo abre, así que una key que corre todo lo demás puede fallar exactamente acá.\n\n```sq-test\n{\"scopes\":[\"agent.feedback\"],\"persists\":\"una fila de feedback de utilidad en la analítica de la KB\",\"spendsCredits\":false}\n```"
+            "description": "Completes the handshake. A notification, so it carries no `id` and returns no result.\n\n**Scope:** any ONE of `rag.query`, `kb.read`, `agent.verify`, `agent.write_audit` or `agent.execute_action` — the `/mcp` entry gate, checked on every request before the handshake. A key with none of them answers 403 here rather than inside a `200`.\n\n```sq-test\n{\"scopes\":[\"rag.query\",\"kb.read\",\"agent.verify\",\"agent.write_audit\",\"agent.execute_action\"],\"persists\":null,\"spendsCredits\":false,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"mcp\"}\n```"
           },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "const raw = pm.response.text();",
+                  "// Unwrap SSE framing when present; a plain JSON body passes through.",
+                  "// NOTE the escaped \\n: this string is JavaScript being GENERATED, so an",
+                  "// unescaped one would put a real newline inside the emitted string literal",
+                  "// and every MCP test would fail to parse.",
+                  "const frames = raw.split('\\n').filter((l) => l.startsWith('data:'));",
+                  "// The LAST frame, not all of them concatenated: a stream can carry a",
+                  "// notification before the response, and gluing two JSON documents",
+                  "// together parses as neither.",
+                  "const payload = (frames.length ? frames[frames.length - 1].slice(5) : raw).trim();",
+                  "",
+                  "// A NOTIFICATION: no `id` was sent, so no body is the correct answer.",
+                  "// If one does come back it still has to be well-formed, hence the",
+                  "// checks below rather than an unconditional pass.",
+                  "",
+                  "if (payload !== '') {",
+                  "    const body = JSON.parse(payload);",
+                  "    pm.test('no JSON-RPC error', function () {",
+                  "        pm.expect(body.error, JSON.stringify(body.error)).to.be.undefined;",
+                  "    });",
+                  "    pm.test('the tool itself did not fail', function () {",
+                  "        const result = body.result || {};",
+                  "        const text = (result.content || []).map((c) => c.text).join(' ');",
+                  "        pm.expect(result.isError, text).to.not.equal(true);",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "3. tools/list",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcpSessionId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mcpUrl}}",
+              "host": [
+                "{{mcpUrl}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 2,\n  \"method\": \"tools/list\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "The tool catalogue. It is NOT filtered by the credential's scopes: every tool is registered and only `execute_action` is conditionally withheld, so a tool appearing here does not mean this key can call it. The handlers reject a missing scope at invocation time.\n\n**Scope:** any ONE of `rag.query`, `kb.read`, `agent.verify`, `agent.write_audit` or `agent.execute_action` — the `/mcp` entry gate, checked on every request before the handshake. A key with none of them answers 403 here rather than inside a `200`.\n\n```sq-test\n{\"scopes\":[\"rag.query\",\"kb.read\",\"agent.verify\",\"agent.write_audit\",\"agent.execute_action\"],\"persists\":null,\"spendsCredits\":false,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"mcp\"}\n```"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "const raw = pm.response.text();",
+                  "// Unwrap SSE framing when present; a plain JSON body passes through.",
+                  "// NOTE the escaped \\n: this string is JavaScript being GENERATED, so an",
+                  "// unescaped one would put a real newline inside the emitted string literal",
+                  "// and every MCP test would fail to parse.",
+                  "const frames = raw.split('\\n').filter((l) => l.startsWith('data:'));",
+                  "// The LAST frame, not all of them concatenated: a stream can carry a",
+                  "// notification before the response, and gluing two JSON documents",
+                  "// together parses as neither.",
+                  "const payload = (frames.length ? frames[frames.length - 1].slice(5) : raw).trim();",
+                  "",
+                  "// This request carries an `id`, so a body is REQUIRED.",
+                  "pm.test('a response body came back', function () {",
+                  "    pm.expect(payload, 'empty body for a request that carries an id').to.not.equal('');",
+                  "});",
+                  "",
+                  "if (payload !== '') {",
+                  "    const body = JSON.parse(payload);",
+                  "    pm.test('no JSON-RPC error', function () {",
+                  "        pm.expect(body.error, JSON.stringify(body.error)).to.be.undefined;",
+                  "    });",
+                  "    pm.test('the response answers THIS request', function () {",
+                  "        pm.expect(body.id, 'expected id 2, got ' + JSON.stringify(body.id) + ' — this is not the response to this request').to.eql(2);",
+                  "    });",
+                  "    pm.test('a result member came back', function () {",
+                  "        pm.expect(Object.prototype.hasOwnProperty.call(body, 'result'), 'no `result` and no `error` — a JSON-RPC response must carry one').to.equal(true);",
+                  "    });",
+                  "    pm.test('the tool itself did not fail', function () {",
+                  "        const result = body.result || {};",
+                  "        const text = (result.content || []).map((c) => c.text).join(' ');",
+                  "        pm.expect(result.isError, text).to.not.equal(true);",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "4. tools/call — list_knowledge_bases",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcpSessionId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mcpUrl}}",
+              "host": [
+                "{{mcpUrl}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 3,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"list_knowledge_bases\",\n    \"arguments\": {}\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Start here: it is how an agent discovers `kbId`.\n\n**Scope:** `rag.query` or `kb.read` — any ONE of them is enough. A key without it still completes `initialize`; the refusal arrives here, inside a `200`, as `result.isError`.\n\n```sq-test\n{\"scopes\":[\"rag.query\",\"kb.read\"],\"persists\":null,\"spendsCredits\":true,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"mcp\"}\n```"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "const raw = pm.response.text();",
+                  "// Unwrap SSE framing when present; a plain JSON body passes through.",
+                  "// NOTE the escaped \\n: this string is JavaScript being GENERATED, so an",
+                  "// unescaped one would put a real newline inside the emitted string literal",
+                  "// and every MCP test would fail to parse.",
+                  "const frames = raw.split('\\n').filter((l) => l.startsWith('data:'));",
+                  "// The LAST frame, not all of them concatenated: a stream can carry a",
+                  "// notification before the response, and gluing two JSON documents",
+                  "// together parses as neither.",
+                  "const payload = (frames.length ? frames[frames.length - 1].slice(5) : raw).trim();",
+                  "",
+                  "// This request carries an `id`, so a body is REQUIRED.",
+                  "pm.test('a response body came back', function () {",
+                  "    pm.expect(payload, 'empty body for a request that carries an id').to.not.equal('');",
+                  "});",
+                  "",
+                  "if (payload !== '') {",
+                  "    const body = JSON.parse(payload);",
+                  "    pm.test('no JSON-RPC error', function () {",
+                  "        pm.expect(body.error, JSON.stringify(body.error)).to.be.undefined;",
+                  "    });",
+                  "    pm.test('the response answers THIS request', function () {",
+                  "        pm.expect(body.id, 'expected id 3, got ' + JSON.stringify(body.id) + ' — this is not the response to this request').to.eql(3);",
+                  "    });",
+                  "    pm.test('a result member came back', function () {",
+                  "        pm.expect(Object.prototype.hasOwnProperty.call(body, 'result'), 'no `result` and no `error` — a JSON-RPC response must carry one').to.equal(true);",
+                  "    });",
+                  "    pm.test('the tool itself did not fail', function () {",
+                  "        const result = body.result || {};",
+                  "        const text = (result.content || []).map((c) => c.text).join(' ');",
+                  "        pm.expect(result.isError, text).to.not.equal(true);",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "5. tools/call — query_knowledge_base",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcpSessionId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mcpUrl}}",
+              "host": [
+                "{{mcpUrl}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 4,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"query_knowledge_base\",\n    \"arguments\": {\n      \"knowledgeBaseId\": \"{{kbId}}\",\n      \"question\": \"how do I reset a user's password?\",\n      \"mode\": \"standard\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "A grounded answer with sources.\n\n`mode` accepts fast / standard / precise. Asking for `precise` over MCP degrades to `standard` — a machine credential has a closed audience scope, which is exactly the case the graph lane declines — and the response says so honestly in `fallbackReason`.\n\n**Scope:** `rag.query` or `kb.read` — any ONE of them is enough. A key without it still completes `initialize`; the refusal arrives here, inside a `200`, as `result.isError`.\n\n```sq-test\n{\"scopes\":[\"rag.query\",\"kb.read\"],\"persists\":null,\"spendsCredits\":true,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"mcp\"}\n```"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "const raw = pm.response.text();",
+                  "// Unwrap SSE framing when present; a plain JSON body passes through.",
+                  "// NOTE the escaped \\n: this string is JavaScript being GENERATED, so an",
+                  "// unescaped one would put a real newline inside the emitted string literal",
+                  "// and every MCP test would fail to parse.",
+                  "const frames = raw.split('\\n').filter((l) => l.startsWith('data:'));",
+                  "// The LAST frame, not all of them concatenated: a stream can carry a",
+                  "// notification before the response, and gluing two JSON documents",
+                  "// together parses as neither.",
+                  "const payload = (frames.length ? frames[frames.length - 1].slice(5) : raw).trim();",
+                  "",
+                  "// This request carries an `id`, so a body is REQUIRED.",
+                  "pm.test('a response body came back', function () {",
+                  "    pm.expect(payload, 'empty body for a request that carries an id').to.not.equal('');",
+                  "});",
+                  "",
+                  "if (payload !== '') {",
+                  "    const body = JSON.parse(payload);",
+                  "    pm.test('no JSON-RPC error', function () {",
+                  "        pm.expect(body.error, JSON.stringify(body.error)).to.be.undefined;",
+                  "    });",
+                  "    pm.test('the response answers THIS request', function () {",
+                  "        pm.expect(body.id, 'expected id 4, got ' + JSON.stringify(body.id) + ' — this is not the response to this request').to.eql(4);",
+                  "    });",
+                  "    pm.test('a result member came back', function () {",
+                  "        pm.expect(Object.prototype.hasOwnProperty.call(body, 'result'), 'no `result` and no `error` — a JSON-RPC response must carry one').to.equal(true);",
+                  "    });",
+                  "    pm.test('the tool itself did not fail', function () {",
+                  "        const result = body.result || {};",
+                  "        const text = (result.content || []).map((c) => c.text).join(' ');",
+                  "        pm.expect(result.isError, text).to.not.equal(true);",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "6. tools/call — verify_claim",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcpSessionId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mcpUrl}}",
+              "host": [
+                "{{mcpUrl}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"jsonrpc\": \"2.0\",\n  \"id\": 5,\n  \"method\": \"tools/call\",\n  \"params\": {\n    \"name\": \"verify_claim\",\n    \"arguments\": {\n      \"knowledgeBaseId\": \"{{kbId}}\",\n      \"claimText\": \"Password reset links expire after 30 minutes.\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Verifies a claim against the KB, the same lanes as the REST `/agent/verify`.\n\n**Scope:** `agent.verify` or `rag.query` — any ONE of them is enough. A key without it still completes `initialize`; the refusal arrives here, inside a `200`, as `result.isError`.\n\n```sq-test\n{\"scopes\":[\"agent.verify\",\"rag.query\"],\"persists\":null,\"spendsCredits\":true,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"mcp\"}\n```"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 2xx', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "const raw = pm.response.text();",
+                  "// Unwrap SSE framing when present; a plain JSON body passes through.",
+                  "// NOTE the escaped \\n: this string is JavaScript being GENERATED, so an",
+                  "// unescaped one would put a real newline inside the emitted string literal",
+                  "// and every MCP test would fail to parse.",
+                  "const frames = raw.split('\\n').filter((l) => l.startsWith('data:'));",
+                  "// The LAST frame, not all of them concatenated: a stream can carry a",
+                  "// notification before the response, and gluing two JSON documents",
+                  "// together parses as neither.",
+                  "const payload = (frames.length ? frames[frames.length - 1].slice(5) : raw).trim();",
+                  "",
+                  "// This request carries an `id`, so a body is REQUIRED.",
+                  "pm.test('a response body came back', function () {",
+                  "    pm.expect(payload, 'empty body for a request that carries an id').to.not.equal('');",
+                  "});",
+                  "",
+                  "if (payload !== '') {",
+                  "    const body = JSON.parse(payload);",
+                  "    pm.test('no JSON-RPC error', function () {",
+                  "        pm.expect(body.error, JSON.stringify(body.error)).to.be.undefined;",
+                  "    });",
+                  "    pm.test('the response answers THIS request', function () {",
+                  "        pm.expect(body.id, 'expected id 5, got ' + JSON.stringify(body.id) + ' — this is not the response to this request').to.eql(5);",
+                  "    });",
+                  "    pm.test('a result member came back', function () {",
+                  "        pm.expect(Object.prototype.hasOwnProperty.call(body, 'result'), 'no `result` and no `error` — a JSON-RPC response must carry one').to.equal(true);",
+                  "    });",
+                  "    pm.test('the tool itself did not fail', function () {",
+                  "        const result = body.result || {};",
+                  "        const text = (result.content || []).map((c) => c.text).join(' ');",
+                  "        pm.expect(result.isError, text).to.not.equal(true);",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "response": []
+        },
+        {
+          "name": "7. close the session (DELETE)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Accept",
+                "value": "application/json, text/event-stream"
+              },
+              {
+                "key": "mcp-session-id",
+                "value": "{{mcpSessionId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{mcpUrl}}",
+              "host": [
+                "{{mcpUrl}}"
+              ]
+            },
+            "description": "Releases the session opened by `initialize`. Answers `204` whether or not the id is still live, so it is safe to re-run.\n\nSessions otherwise linger for 30 minutes and a credential is capped at 5 concurrent, so skipping this makes the sixth run of this folder fail with `429` — a session-budget problem that reads like an auth one.\n\nNeeds no entitlement: closing your own session exercises no paid capability, so this works even on a downgraded workspace.\n\n**Scope:** any ONE of `rag.query`, `kb.read`, `agent.verify`, `agent.write_audit` or `agent.execute_action` — the `/mcp` entry gate, checked on every request before the handshake. A key with none of them answers 403 here rather than inside a `200`.\n\n```sq-test\n{\"scopes\":[\"rag.query\",\"kb.read\",\"agent.verify\",\"agent.write_audit\",\"agent.execute_action\"],\"persists\":null,\"spendsCredits\":false,\"auth\":true,\"internalRead\":false,\"captures\":[],\"transport\":\"mcp\"}\n```"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('session released', function () {",
+                  "    pm.expect(pm.response.code, pm.response.text()).to.be.within(200, 299);",
+                  "});",
+                  "// Cleared ONLY on success. A failed pm.test does not stop this script,",
+                  "// and this request can be refused before it reaches the handler that",
+                  "// closes anything — a 401 from mcpAuth, a 429 from the transport",
+                  "// limiter. The server still holds that session, so wiping the id here",
+                  "// would leave no way to retry the close and burn a slot of the five",
+                  "// this request exists to protect.",
+                  "if (pm.response.code >= 200 && pm.response.code < 300) {",
+                  "    pm.collectionVariables.set('mcpSessionId', '');",
+                  "} else {",
+                  "    console.log('close refused (' + pm.response.code + ') — session id kept so you can retry');",
+                  "}"
+                ]
+              }
+            }
+          ],
           "response": []
         }
       ]

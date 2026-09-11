@@ -25,16 +25,17 @@ El default de `baseUrl` es **inalcanzable a propósito** (`.invalid`, reservado 
 
 ## Antes de darle a «Run folder»
 
-**Dos peticiones escriben en tu workspace** y no hay ninguna que limpie:
+**Tres peticiones escriben en tu workspace** y no hay ninguna que limpie:
 
 | Petición | Qué deja |
 | :--- | :--- |
-| `Agent API → 5. Gap report` | una fila de hueco de conocimiento en la cola de triage |
-| `Agent API → 6. Feedback` | una fila de feedback de utilidad en la analítica de la KB |
+| `Agent API → Report a knowledge gap` | una fila de hueco de conocimiento en la cola de triage |
+| `Agent API → Feedback` | una fila de feedback de utilidad en la analítica de la KB |
+| **`Ingest (iPaaS) → Create a draft article`** | **un artículo BORRADOR en la KB** — sin publicar, pero contenido real que alguien tiene que borrar. Es el único endpoint público que escribe contenido |
 
-**Tres gastan créditos de IA:** `Agent API → 1. Retrieve`, `2. Verify` y `3. Query`. La que sorprende es la primera: **`Retrieve` los gasta aunque no sintetice nada**, porque embebe la consulta en cada llamada.
+**Cuatro gastan créditos de IA:** las tres de `Agent API` —`Retrieve`, `Verify` y `Query`— más `Ingest (iPaaS) → Create a draft article`. La que sorprende es `Retrieve`: **los gasta aunque no sintetice nada**, porque embebe la consulta en cada llamada.
 
-Un caso que sorprende al revés: `Knowledge Bases → Query knowledge base` **no gasta créditos** pese a llamarse *query* y pedir `rag.query`. Es búsqueda léxica.
+Un caso que sorprende al revés: `Knowledge Bases → Query knowledge base (lexical)` **no gasta créditos** pese a llamarse *query* y pedir `rag.query`. Es búsqueda léxica.
 
 Apuntá esto a un workspace que estés dispuesto a dejar marcado, o corré la carpeta `Knowledge Bases` sola, que es toda de lectura.
 
@@ -97,7 +98,7 @@ Los diez minutos son política de esta colección, no del servidor.
 | `409` en gap-report o feedback | La misma clave de idempotencia con un cuerpo distinto, dentro de la ventana de 24 h |
 | `429` | Dos techos con relojes distintos: el de la credencial y uno por IP en el borde |
 | `503` con `RATE_LIMITER_UNAVAILABLE` | El limitador caído fallando cerrado. **No** te limitaron |
-| `200` con `totalFound: 0` en `Query knowledge base` pero el Studio sí responde | Esa petición busca **artículos**; el panel de Pruebas RAG busca **documentos vectorizados**. Una KB documental tiene 0 de los primeros. Usá `Agent API → 1. Retrieve` |
+| `200` con `totalFound: 0` en `Query knowledge base (lexical)` pero el Studio sí responde | Esa petición busca **artículos**; el panel de Pruebas RAG busca **documentos vectorizados**. Una KB documental tiene 0 de los primeros. Usá `Agent API → 1. Retrieve` |
 | `200` con `articles: []` en `List articles` | El parámetro `q` está tildado y no matchea. Viene destildado; si lo tildaste, es filtro, no fallo |
 | `200` con cuerpo HTML | `baseUrl` apunta a un proxy o una landing, no a la celda |
 

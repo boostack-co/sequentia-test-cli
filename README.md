@@ -363,14 +363,14 @@ En [`collection/`](collection/) vive la colección pública de la API, con su en
 
 Cada petición lleva en su descripción un bloque `sq-test` legible por máquina con sus scopes, qué persiste y si gasta créditos — que es lo que después alimenta la guarda de `--yes`. Ver [`collection/README.md`](collection/README.md) para usarla y [`collection/PUBLISHING.md`](collection/PUBLISHING.md) para mantenerla.
 
-**El original vive acá y lo de Postman es una copia.** `api collection --check` es lo que hace cumplir esa regla: trae la publicada y reporta la deriva **en los dos sentidos** — lo que está acá y no allá (falta republicar) y lo que está allá y no acá (alguien editó en la interfaz de Postman). Sale con `1` si hay deriva, así que puede romper un pipeline.
+**El original lo genera la plataforma desde sus routers; lo de acá es una copia vendorada.** Cada celda sirve la colección con la que fue construida en `/.well-known/postman-collection.json`, sin credencial, así que el artefacto y el servidor son el mismo build. `api collection --check` **deriva esa URL de tu celda** y reporta la deriva **en los dos sentidos** — lo que el CLI empaqueta y la celda no sirve, y al revés. Sale con `1` si hay deriva, así que puede romper un pipeline.
 
 **La colección está publicada** en [este workspace público](https://www.postman.com/egonzalez-834a9dbf-7945626/sequentia-api). Para contrastar contra ella hace falta una *access key* de lectura propia en `SQ_TEST_COLLECTION_URL` — no viene por default a propósito: es un token, y un token en un repo público es algo que alguien rota algún día. Cómo se saca está en [`collection/PUBLISHING.md`](collection/PUBLISHING.md).
 
 Compara contra **el checkout en el que estás parado**, no contra `main`: en una rama atrasada va a reportar deriva que no es real. Es lo correcto —contrasta lo que ESE árbol empaqueta— pero conviene saberlo antes de asustarse.
 
 ```bash
-node sq-test.mjs api collection --check      # necesita SQ_TEST_COLLECTION_URL
+node sq-test.mjs api collection --check      # usa tu celda; SQ_TEST_COLLECTION_URL la pisa
 node sq-test.mjs api collection --refresh    # además guarda lo traído en ~/.config/sq-test/
 ```
 

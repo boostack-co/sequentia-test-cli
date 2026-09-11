@@ -88,6 +88,34 @@ const derivasDe = (remota) =>
 
 const tipos = (derivas) => derivas.map((d) => d.tipo).sort();
 
+/**
+ * Quita la última petición REST y devuelve la colección.
+ *
+ * Antes esto era `c.item.at(-1).item.pop()`, y dejó de servir cuando la
+ * colección canónica sumó la carpeta MCP al final: el catálogo salta lo que no
+ * es REST, así que quitar una de MCP no produce deriva y el fixture medía cero
+ * contra cero. La carpeta que se toca tiene que ser una que el CLI ejecute.
+ */
+function sinLaUltimaRest(c) {
+  for (let i = c.item.length - 1; i >= 0; i--) {
+    const f = c.item[i];
+    const rest = (f.item ?? []).filter((p) => {
+      const m = String(p.request?.description ?? "").match(/```sq-test\n([\s\S]*?)\n```/);
+      if (!m) return true;
+      try {
+        return (JSON.parse(m[1]).transport ?? "rest") === "rest";
+      } catch {
+        return true;
+      }
+    });
+    if (rest.length) {
+      f.item.splice(f.item.indexOf(rest.at(-1)), 1);
+      return c;
+    }
+  }
+  throw new Error("la colección no tiene ninguna petición REST");
+}
+
 /** Afirma que armar el catálogo con esa colección revienta con CatalogError. */
 const rechazaCatalogo = (titulo, fn) => {
   try {
@@ -135,22 +163,22 @@ await comprobar(
   "una petición que está en el repo y no publicada",
   async () => {
     const c = copia();
-    c.item.at(-1).item.pop();
+    sinLaUltimaRest(c);
     return tipos(await derivasDe(c));
   },
   ["solo-en-el-repo"],
 );
 
 await comprobar(
-  "una petición publicada que no está en el repo — alguien editó en la UI",
+  "una petición que sirve la celda y no está en la copia del repo",
   async () => {
     const c = copia();
     const nueva = JSON.parse(JSON.stringify(peticiones(c)[0]));
-    nueva.name = "Inventada en la interfaz";
+    nueva.name = "Servida por la celda y ausente del repo";
     c.item.at(-1).item.push(nueva);
     return tipos(await derivasDe(c));
   },
-  ["solo-en-postman"],
+  ["solo-en-la-celda"],
 );
 
 await comprobar(
@@ -216,11 +244,11 @@ await comprobar(
   "el informe nombra la petición y repite de qué lado está el original",
   async () => {
     const c = copia();
-    c.item.at(-1).item.pop();
+    sinLaUltimaRest(c);
     const texto = formatearDerivas(await derivasDe(c)).join("\n");
     return [
-      /está en el repo y NO publicada/.test(texto),
-      /El repo es el original y Postman la copia/.test(texto),
+      /está en el repo y la celda NO la sirve/.test(texto),
+      /El original lo genera la plataforma y la celda lo sirve/.test(texto),
       /Sin deriva/.test(texto),
     ];
   },
@@ -228,7 +256,7 @@ await comprobar(
 );
 
 await comprobar("sin derivas, el informe lo dice y no inventa una lista", () => formatearDerivas([]), [
-  "✔ Sin deriva: lo publicado es lo que está en el repo.",
+  "✔ Sin deriva: la copia del repo es la que sirve la celda.",
 ]);
 
 // --- El otro extremo: lo que responde el servidor de Postman ---------------
@@ -248,14 +276,14 @@ const falla = async (titulo, cuerpo, opts, esperado) =>
     "ok",
   );
 
-await falla("un 403 sugiere que la clave fue rotada o revocada", "{}", { status: 403 }, /rotada o revocada/);
-await falla("un 401 también", "{}", { status: 401 }, /rotada o revocada/);
-await falla("un 500 se reporta con su código, sin la pista de la clave", "{}", { status: 500 }, /respondió 500/);
+await falla("un 403 dice que NO es tu key: esa ruta es pública", "{}", { status: 403 }, /NO es tu key/);
+await falla("un 401 también", "{}", { status: 401 }, /NO es tu key/);
+await falla("un 500 se reporta con su código, sin esa pista", "{}", { status: 500 }, /respondió 500/);
 await falla(
-  "el HTML de la página web en vez del JSON de la API",
-  "<!doctype html><html><body>Postman</body></html>",
+  "un HTML en vez del JSON — el origen no es una celda",
+  "<!doctype html><html><body>Not a cell</body></html>",
   { tipo: "text/html" },
-  /la URL sea la de la API de Postman y no la de la página web/,
+  /el origen sea el de una celda y la ruta \/\.well-known\/postman-collection\.json/,
 );
 
 // --- Los query params: los manda igual que Postman, y el control los ve ------
