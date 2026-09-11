@@ -62,6 +62,11 @@ Agrega el **carril agéntico de la API REST** (`/api/v1`) junto al de MCP, que s
 - **El job `secretos` del CI buscaba una sola forma de credencial** (`sk_live_…`), así que una access key de Postman (`access_key=…`, `PMAK-…`) o un host de celda pasaban en verde — y `PUBLISHING.md` afirmaba que el job los rechazaría. Ahora busca las tres clases.
 - **`collection/README.md` refuerza el aviso de la variable `apiKey`**: va como valor *current*, nunca *initial*. El *initial* se sincroniza con el workspace, así que en un workspace **público** se publica.
 
+- **Un query param `disabled` de Postman ahora no viaja en la petición.** El catálogo lo ignoraba, así que la misma petición hacía dos cosas distintas según se corriera desde Postman o desde el CLI — y el comando que el menú imprime dejaba de reproducir lo que Postman hace.
+- **`api collection --check` ahora compara los query params.** Estaban fuera de los campos contrastados y no forman parte de `ruta`, que es solo el path: cambiar, agregar o desactivar un parámetro en Postman dejaba el chequeo en verde. Son justo lo que gobierna qué devuelve una petición.
+- **`List articles` lista de verdad en la primera corrida.** Traía `?q=contraseña` activo, así que en una KB donde ese término no matchea devolvía `articles: []` y se leía como un fallo. El parámetro sigue ahí, documentado y **destildado**; la trampa que enseña —que `search=` se ignora en silencio— se prueba tildándolo.
+- **`Query knowledge base (léxica)` dice sobre qué busca.** Busca **artículos**, no los documentos ingeridos, así que en una KB documental devuelve `totalFound: 0` para cualquier término mientras el panel de Pruebas RAG del Studio responde la misma pregunta. Ahora la descripción lo explica y manda al carril correcto (`Agent API → 1. Retrieve`).
+
 ### Notas para quien actualiza
 
 - **`SQ_TEST_API_URL` no es el endpoint MCP.** Suele ser otro host: es el origen **directo** de tu celda, sin barra final y sin `/api/v1`.

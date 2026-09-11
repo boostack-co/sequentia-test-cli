@@ -242,6 +242,58 @@ await falla(
   /la URL sea la de la API de Postman y no la de la página web/,
 );
 
+// --- Los query params: los manda igual que Postman, y el control los ve ------
+//
+// Un parámetro `disabled` está a la vista en Postman pero NO se manda. El
+// catálogo lo ignoraba, así que la MISMA petición hacía dos cosas distintas
+// según desde dónde se corriera — y el comando que el menú imprime dejaba de
+// reproducir lo que Postman hace, que es la invariante 1 del proyecto.
+await comprobar(
+  "un query param `disabled` no viaja en la petición",
+  async () => {
+    const c = copia();
+    const p = peticiones(c).find((x) => x.request?.url?.query?.length);
+    p.request.url.query = [
+      { key: "vivo", value: "1" },
+      { key: "apagado", value: "2", disabled: true },
+    ];
+    const cat = catalogoDe(c, join(SANDBOX, "dis.json"));
+    // Las entradas se indexan por "Carpeta / Nombre", no por el nombre solo.
+    const clave = [...cat.entradas.keys()].find((k) => k.endsWith(`/ ${p.name}`));
+    return cat.entradas.get(clave).query.map((q) => q.key);
+  },
+  ["vivo"],
+);
+
+// `query` no estaba en los campos comparados, y era un agujero: los parámetros
+// no forman parte de `ruta` —que es solo el path—, así que cambiarlos en
+// Postman dejaba el chequeo en verde. Son justo lo que gobierna qué devuelve
+// una petición.
+await comprobar(
+  "un query param cambiado en lo publicado es deriva",
+  async () => {
+    const c = copia();
+    const p = peticiones(c).find((x) => x.request?.url?.query?.length);
+    p.request.url.query = [...p.request.url.query, { key: "inventado", value: "1" }];
+    const derivas = await derivasDe(c);
+    return [tipos(derivas), derivas[0]?.campo];
+  },
+  [["difiere"], "query"],
+);
+// Y el control en la otra dirección: desactivar un parámetro TAMBIÉN es deriva.
+// Si no lo fuera, alguien podría apagar `?limit=` en la interfaz y el chequeo
+// seguiría en verde mientras la colección publicada devuelve otra cosa.
+await comprobar(
+  "desactivar un query param en lo publicado también es deriva",
+  async () => {
+    const c = copia();
+    const p = peticiones(c).find((x) => x.request?.url?.query?.length);
+    p.request.url.query = p.request.url.query.map((q) => ({ ...q, disabled: true }));
+    return tipos(await derivasDe(c));
+  },
+  ["difiere"],
+);
+
 rmSync(SANDBOX, { recursive: true, force: true });
 
 console.log(fallos ? `\n${fallos} fallos` : "\nTodo en verde.");
