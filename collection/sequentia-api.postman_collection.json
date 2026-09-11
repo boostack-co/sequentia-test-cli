@@ -116,11 +116,11 @@
             "method": "GET",
             "header": [{ "key": "Accept", "value": "application/json" }],
             "url": {
-              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/articles?q=contraseña&limit=5",
+              "raw": "{{baseUrl}}/api/v1/knowledge-bases/{{kbId}}/articles?limit=5",
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "articles"],
               "query": [
-                { "key": "q", "value": "contraseña", "description": "El filtro de texto. **Se llama `q`**: un `search=` se ignora en silencio y devuelve el listado entero." },
+                { "key": "q", "value": "contraseña", "disabled": true, "description": "El filtro de texto, **desactivado a propósito**: la petición se llama *List articles* y tiene que listar en la primera corrida. Tildalo para filtrar. **Se llama `q`**: un `search=` se ignora en silencio y devuelve el listado entero — tildá éste y probá el otro, es la trampa que este parámetro existe para mostrar." },
                 { "key": "limit", "value": "5" }
               ]
             },
@@ -160,7 +160,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "knowledge-bases", "{{kbId}}", "query"]
             },
-            "description": "Búsqueda **léxica** dentro de una KB. El nombre engaña: pese a llamarse `query` y pedir `rag.query`, **no sintetiza nada y no gasta créditos de IA**. Para la respuesta generada está el carril agéntico.\n\nEl cuerpo acepta `query`, `maxResults` e `includeMetadata`. Un `limit` se descarta en silencio.\n\n```sq-test\n{\"scopes\":[\"rag.query\"],\"persists\":null,\"spendsCredits\":false}\n```"
+            "description": "Búsqueda **léxica** dentro de una KB. El nombre engaña: pese a llamarse `query` y pedir `rag.query`, **no sintetiza nada y no gasta créditos de IA**. Para la respuesta generada está el carril agéntico.\n\n**Busca sobre los ARTÍCULOS de la KB, no sobre sus documentos ingeridos**, y esa distinción explica el resultado vacío más común: una KB \"documental\" —contenido cargado como documento, vectorizado, sin publicar como artículos— devuelve `200` con `totalFound: 0` para cualquier término, mientras el panel de Pruebas RAG del Studio responde la misma pregunta sin problema. No está rota: son dos índices distintos. Medido: sobre una KB con 0 artículos y 1 documento indexado, ésta devuelve 0 para `maria`, `Gabriel` y `Nazaret`, y `Agent API → 1. Retrieve` devuelve 5 fragmentos para las tres.\n\nSi tu KB es documental, el carril que buscás es **`Agent API → 1. Retrieve`** (fragmentos) o **`3. Query`** (respuesta sintetizada). Los dos gastan créditos; ésta no.\n\nEl cuerpo acepta `query`, `maxResults` e `includeMetadata`. Un `limit` se descarta en silencio.\n\n```sq-test\n{\"scopes\":[\"rag.query\"],\"persists\":null,\"spendsCredits\":false}\n```"
           },
           "response": []
         },

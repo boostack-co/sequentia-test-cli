@@ -30,7 +30,11 @@ import { describirFalloFetch } from "./http-comun.mjs";
 export const CACHE_FILE = join(dirname(USER_ENV_FILE), "coleccion-publicada.json");
 
 /** Los campos de los que alguien depende. El resto es ruido de Postman. */
-const COMPARABLES = ["metodo", "ruta", "scopes", "persists", "spendsCredits", "internalRead", "captures", "auth", "body", "cabeceras"];
+// `query` estaba afuera, y era un agujero: los parámetros no forman parte de
+// `ruta` —que es solo el path—, así que cambiar, agregar o desactivar uno en
+// Postman dejaba el chequeo en verde. Es justo lo que gobierna qué devuelve una
+// petición (`?q=`, `?limit=`), o sea lo que un cliente nota primero.
+const COMPARABLES = ["metodo", "ruta", "query", "scopes", "persists", "spendsCredits", "internalRead", "captures", "auth", "body", "cabeceras"];
 
 export class SyncError extends Error {}
 
