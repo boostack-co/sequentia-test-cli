@@ -97,6 +97,8 @@ Los diez minutos son política de esta colección, no del servidor.
 | `409` en gap-report o feedback | La misma clave de idempotencia con un cuerpo distinto, dentro de la ventana de 24 h |
 | `429` | Dos techos con relojes distintos: el de la credencial y uno por IP en el borde |
 | `503` con `RATE_LIMITER_UNAVAILABLE` | El limitador caído fallando cerrado. **No** te limitaron |
+| `200` con `totalFound: 0` en `Query knowledge base` pero el Studio sí responde | Esa petición busca **artículos**; el panel de Pruebas RAG busca **documentos vectorizados**. Una KB documental tiene 0 de los primeros. Usá `Agent API → 1. Retrieve` |
+| `200` con `articles: []` en `List articles` | El parámetro `q` está tildado y no matchea. Viene destildado; si lo tildaste, es filtro, no fallo |
 | `200` con cuerpo HTML | `baseUrl` apunta a un proxy o una landing, no a la celda |
 
 ## Estado de verificación

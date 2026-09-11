@@ -150,7 +150,13 @@ function entradaDe(nombre, item) {
     .filter((h) => !/^(accept|content-type)$/i.test(h.key))
     .map((h) => ({ key: h.key, value: h.value }));
 
-  const query = (req.url?.query ?? []).map((q) => ({ key: q.key, value: q.value, description: q.description }));
+  // Un parámetro `disabled` en Postman está a la vista pero NO se manda. Si el
+  // CLI lo mandara igual, la misma petición haría dos cosas distintas según
+  // desde dónde se corra, y el comando que el menú imprime dejaría de
+  // reproducir lo que hace Postman — que es la invariante 1 del proyecto.
+  const query = (req.url?.query ?? [])
+    .filter((q) => !q.disabled)
+    .map((q) => ({ key: q.key, value: q.value, description: q.description }));
 
   const entrada = {
     nombre,
