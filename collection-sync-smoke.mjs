@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SyncError, catalogoDe, comparar, formatearDerivas, traerPublicada } from "./collection-sync.mjs";
+import { CatalogError, catalogoDesde } from "./catalog.mjs";
 
 const ORIGINAL = fileURLToPath(new URL("./collection/sequentia-api.postman_collection.json", import.meta.url));
 const SANDBOX = mkdtempSync(join(tmpdir(), "sq-test-sync-smoke-"));
@@ -86,6 +87,21 @@ const derivasDe = (remota) =>
   });
 
 const tipos = (derivas) => derivas.map((d) => d.tipo).sort();
+
+/** Afirma que armar el catálogo con esa colección revienta con CatalogError. */
+const rechazaCatalogo = (titulo, fn) => {
+  try {
+    fn();
+    fallos++;
+    console.error(`✘ ${titulo} — NO rechazó`);
+  } catch (err) {
+    if (err instanceof CatalogError) console.log(`✔ ${titulo}`);
+    else {
+      fallos++;
+      console.error(`✘ ${titulo} — lanzó otra cosa: ${err}`);
+    }
+  }
+};
 
 // --- El control en la dirección contraria, primero -------------------------
 // Va antes que las negativas a propósito: una guarda que grita siempre no es
@@ -292,6 +308,76 @@ await comprobar(
     return tipos(await derivasDe(c));
   },
   ["difiere"],
+);
+
+// --- El artefacto es UNO y sirve a dos públicos ------------------------------
+//
+// La colección canónica que genera la plataforma trae también la carpeta MCP:
+// para una persona en Postman es lo único que hace tocable ese protocolo a mano
+// —trae el handshake y arrastra el `mcp-session-id`—. Este CLI no la ejecuta:
+// MCP no es otra ruta, es otro transporte, y su carril propio ya lo cubre con
+// cliente, menú y comandos que no leen esta colección.
+//
+// Por eso el catálogo descarta lo no-REST ANTES de validar. Si validara
+// primero, una petición de otro transporte —que no cumple ni tiene por qué
+// cumplir las reglas del carril REST— abortaría la carga ENTERA.
+const conTransporte = (transport, extra = {}) => ({
+  name: "Prueba",
+  request: {
+    method: "GET",
+    url: { raw: "{{baseUrl}}/api/v1/health", host: ["{{baseUrl}}"], path: ["api", "v1", "health"] },
+    description:
+      "x\n\n```sq-test\n" + JSON.stringify({ scopes: [], persists: null, spendsCredits: false, ...(transport ? { transport } : {}) }) + "\n```",
+    ...extra,
+  },
+});
+const catalogoCon = (items) => catalogoDesde({ item: items });
+
+await comprobar(
+  "una petición `transport: rest` entra al catálogo",
+  () => catalogoCon([conTransporte("rest")]).entradas.size,
+  1,
+);
+// El default importa: la colección escrita a mano no trae el campo, y el
+// comportamiento sin él tiene que ser el que ya andaba.
+await comprobar(
+  "sin el campo `transport`, se asume rest y entra igual",
+  () => catalogoCon([conTransporte(null)]).entradas.size,
+  1,
+);
+await comprobar(
+  "una petición `transport: mcp` NO entra",
+  () => catalogoCon([conTransporte("rest"), conTransporte("mcp")]).entradas.size,
+  1,
+);
+
+// El caso que motiva el orden: una petición MCP real apunta a `{{mcpUrl}}` y
+// NO empieza por /api/v1. Validarla antes de descartarla rompía la colección
+// entera con un error sobre una petición que este cargador no va a ejecutar.
+await comprobar(
+  "una MCP con host y ruta ajenos al carril REST no rompe la carga",
+  () => {
+    const mcp = conTransporte("mcp");
+    mcp.request.method = "POST";
+    mcp.request.url = { raw: "{{mcpUrl}}", host: ["{{mcpUrl}}"] };
+    mcp.request.body = { mode: "raw", raw: '{"jsonrpc":"2.0","method":"initialize"}' };
+    return catalogoCon([conTransporte("rest"), mcp]).entradas.size;
+  },
+  1,
+);
+
+// El control en la dirección contraria, y es el que impide que este descarte se
+// convierta en una vía para colar peticiones rotas: lo que NO declara
+// transporte sigue validándose entero. Un `{{mcpUrl}}` sin marcar tiene que
+// romper, porque entonces sí es una petición REST que nombra un host que no es
+// el de la config.
+rechazaCatalogo("un host ajeno SIN marcar como mcp sigue rompiendo la carga", () => {
+  const suelta = conTransporte(null);
+  suelta.request.url = { raw: "{{mcpUrl}}", host: ["{{mcpUrl}}"] };
+  return catalogoCon([suelta]);
+});
+rechazaCatalogo("y una sin bloque sq-test también, con su mensaje", () =>
+  catalogoCon([{ name: "Sin bloque", request: { method: "GET", url: { host: ["{{baseUrl}}"], path: ["api", "v1", "x"] } } }]),
 );
 
 rmSync(SANDBOX, { recursive: true, force: true });
