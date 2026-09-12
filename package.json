@@ -37,6 +37,8 @@
     "mcp-client.mjs",
     "api-client.mjs",
     "catalog.mjs",
+    "errores.mjs",
+    "http-comun.mjs",
     "agent.mjs",
     "doctor.mjs",
     "collection-sync.mjs",

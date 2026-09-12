@@ -13,7 +13,7 @@
  *   node commands-smoke.mjs
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -241,6 +241,36 @@ await comprobar(
   () =>
     NOMBRES_EN_EL_CI.map((n) => [n, [...entradas.keys()].filter((k) => k.toLowerCase().includes(n.toLowerCase())).length])
       .filter(([, n]) => n !== 1),
+  [],
+);
+
+// --- Lo que el paquete publicado se lleva --------------------------------
+//
+// La `2.2.0` se iba a publicar SIN `errores.mjs` ni `http-comun.mjs`. Los dos se
+// agregaron durante la épica, los dos se importan en runtime, y ninguno estaba
+// en `files`. El paquete instalado moría en `ERR_MODULE_NOT_FOUND` antes de
+// imprimir `--help`: no un comando roto, la herramienta entera.
+//
+// El CI no podía verlo porque corre desde el checkout, donde los archivos
+// existen; sólo se ve empaquetando. Así que acá se recorre el grafo de imports
+// desde el `bin` declarado y se afirma que todo lo local que se alcanza viaja.
+// Derivado del grafo y no de una lista, que es lo que falló.
+const raiz = fileURLToPath(new URL(".", import.meta.url));
+const pkg = JSON.parse(readFileSync(join(raiz, "package.json"), "utf8"));
+const declarados = new Set(pkg.files ?? []);
+
+const alcanzables = new Set();
+const porVisitar = [String(Object.values(pkg.bin ?? {})[0] ?? pkg.main ?? "sq-test.mjs").replace(/^\.\//, "")];
+while (porVisitar.length) {
+  const f = porVisitar.pop();
+  if (alcanzables.has(f) || !existsSync(join(raiz, f))) continue;
+  alcanzables.add(f);
+  for (const m of readFileSync(join(raiz, f), "utf8").matchAll(/from\s+"\.\/([^"]+\.mjs)"/g)) porVisitar.push(m[1]);
+}
+
+await comprobar(
+  "todo módulo que el bin alcanza está en `files` del package.json",
+  () => [...alcanzables].filter((f) => !declarados.has(f)).sort(),
   [],
 );
 
