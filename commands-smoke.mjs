@@ -72,6 +72,38 @@ await comprobar(
   () => enSandbox(`import { resolveApiConfig } from ${JSON.stringify(COMMANDS)}; console.log(JSON.stringify(resolveApiConfig({}).apiUrl));`),
   "https://celda-del-usuario.invalid",
 );
+
+// Y el caso que este guion NO cubría, porque corre desde un directorio de
+// trabajo distinto del de instalación: trabajando DESDE el repo los dos son el
+// mismo archivo, y deduplicar conservando la primera aparición colapsaba el
+// `.env` del proyecto en la ranura de instalación —la de MENOR prioridad—, así
+// que `~/.config/sq-test/.env` lo pisaba. El comando salía con éxito contra la
+// celda equivocada y con la key equivocada, sin decir nada.
+//
+// Es exactamente el flujo que el README recomienda: clonar, copiar
+// `.env.example` y trabajar ahí. Se simula poniendo el cwd EN el directorio del
+// módulo, que es lo que hace `HERE === cwd`.
+// Se afirma el ORDEN, no los valores: así no depende de que exista un `.env`
+// real en el checkout de quien corra esto, que en el CI no existe.
+const AQUI = fileURLToPath(new URL(".", import.meta.url));
+const orden = JSON.parse(
+  spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", `import { envFileCandidates } from ${JSON.stringify(COMMANDS)}; console.log(JSON.stringify(envFileCandidates()));`],
+    { cwd: AQUI, env: { ...ENTORNO, HOME: SANDBOX, USERPROFILE: SANDBOX }, encoding: "utf8" },
+  ).stdout,
+);
+await comprobar(
+  "con cwd === directorio del módulo, el .env de ahí queda ÚLTIMO (máxima prioridad)",
+  () => orden.at(-1) === join(AQUI, ".env"),
+  true,
+);
+await comprobar(
+  "y el del usuario queda ANTES, o sea por debajo",
+  () => orden.indexOf(join(SANDBOX, ".config", "sq-test", ".env")) < orden.length - 1,
+  true,
+);
+
 rmSync(SANDBOX, { recursive: true, force: true });
 
 // ---------------------------------------------------------------------------
@@ -92,7 +124,15 @@ await comprobar("un posicional simple no lleva comillas", () => buildCommandLine
 // Y el CLI parsea lo que se imprimió: un --var repetido y un posicional
 // citado llegan enteros. Se corre el parser de verdad, sin red.
 const CLI = fileURLToPath(new URL("./sq-test.mjs", import.meta.url));
-const parsea = (args) => spawnSync(process.execPath, [CLI, ...args], { env: { ...ENTORNO, SQ_TEST_TOKEN: "x" }, encoding: "utf8" });
+// `SQ_TEST_API_URL: ""` a propósito: una variable de proceso presente gana a
+// todo `.env`, y vacía se lee como ausente. Sin eso, el `.env` que un
+// colaborador crea siguiendo el README —copiar `.env.example`— le daba una URL
+// de verdad y estos casos, que afirman "falla recién por config", fallaban por
+// otra cosa. Pasaban sólo porque el `.env` del proyecto se ignoraba, que es el
+// defecto que este mismo PR arregla: el guion tiene que ser inmune a la config
+// de quien lo corre, no depender de que no tenga ninguna.
+const parsea = (args) =>
+  spawnSync(process.execPath, [CLI, ...args], { env: { ...ENTORNO, SQ_TEST_TOKEN: "x", SQ_TEST_API_URL: "" }, encoding: "utf8" });
 await comprobar(
   "`api run 'Get knowledge base' --var kbId=abc` pasa el parseo (falla recién por config)",
   () => /SQ_TEST_API_URL/.test(parsea(["api", "run", "Get knowledge base", "--var", "kbId=abc"]).stderr),
