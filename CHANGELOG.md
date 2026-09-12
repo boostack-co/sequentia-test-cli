@@ -69,6 +69,13 @@ Agrega el **carril agéntico de la API REST** (`/api/v1`) junto al de MCP, que s
 
 - **El catálogo salta lo que declara otro transporte.** El artefacto canónico de la API es uno solo y sirve a dos públicos: una persona en Postman —que ahí sí puede tocar MCP a mano, porque la carpeta trae el handshake y arrastra el `mcp-session-id`— y este CLI, que habla REST. Una entrada con `"transport"` distinto de `"rest"` en su bloque `sq-test` se descarta **antes de validarse**: no cumple ni tiene por qué cumplir las reglas del carril REST, y validarla primero abortaría la carga entera por algo que este cargador no ejecuta. La **ausencia** del campo significa `rest`, así que nada cambia para una colección que no lo traiga.
 
+### La colección ya no se escribe acá
+
+- **El artefacto canónico lo genera la plataforma desde sus routers** y cada celda lo sirve en `/.well-known/postman-collection.json`, sin credencial. Esta carpeta pasa a ser una **copia vendorada**: 24 peticiones, con las carpetas `Ingest (iPaaS)` y `MCP` que la escrita a mano no tenía.
+- **`api collection --check` deriva la URL de tu celda** (`SQ_TEST_API_URL`) en vez de apuntar a un sitio fijo. Contrastar contra una celda ajena compararía contra un contrato que no es el que vas a llamar — y un default fijo traería una coordenada de celda a un repo público. `SQ_TEST_COLLECTION_URL` sigue existiendo para pisar el origen.
+- **Las peticiones de MCP se saltan** al armar el catálogo: son otro transporte y el CLI ya cubre MCP por su carril propio. Quedan en el artefacto porque para una persona en Postman sí son útiles.
+- **Quedan fuera, por ahora, cinco peticiones** que la colección escrita a mano sí tenía: el detalle de analytics (`searches`, `feedback`, `top-articles`), `gaps/stats` y `Categories (iPaaS)`. Van al catálogo del generador aguas arriba.
+
 ### Notas para quien actualiza
 
 - **`SQ_TEST_API_URL` no es el endpoint MCP.** Suele ser otro host: es el origen **directo** de tu celda, sin barra final y sin `/api/v1`.

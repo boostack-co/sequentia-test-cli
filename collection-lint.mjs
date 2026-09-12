@@ -71,6 +71,19 @@ for (const m of textoScripts.matchAll(CAPTURA)) definidas.add(m[1]);
 const emitidas = new Set();
 for (const entrada of entradas.values()) for (const v of entrada.variables) emitidas.add(v);
 
+/**
+ * Las variables que aparecen en la colección CRUDA, incluidas las de las
+ * peticiones que el catálogo salta por declarar otro transporte.
+ *
+ * Sin esto, `{{mcpUrl}}` se denunciaba como variable que nadie usa: la usan las
+ * siete peticiones de MCP, que este CLI no ejecuta y por eso no entran al
+ * catálogo. El chequeo de «sobra» tiene que mirar el documento entero — lo que
+ * el entorno declara es para quien abre Postman, no solo para quien corre el
+ * CLI. El de «nadie la define», en cambio, sigue mirando el catálogo: ahí lo
+ * que importa es que lo ejecutable se pueda resolver.
+ */
+const emitidasEnCrudo = new Set([...JSON.stringify(coleccion).matchAll(/\{\{([A-Za-z0-9_]+)\}\}/g)].map((m) => m[1]));
+
 for (const entrada of entradas.values()) {
   for (const v of entrada.variables) {
     if (!definidas.has(v)) mal(`"${entrada.nombre}" emite {{${v}}} y nadie la define`);
@@ -86,7 +99,7 @@ const usadasEnScripts = new Set();
 for (const m of textoScripts.matchAll(LEE)) usadasEnScripts.add(m[1].replace(/[{}]/g, ""));
 
 for (const v of coleccion.variable ?? []) {
-  if (!emitidas.has(v.key) && !usadasEnScripts.has(v.key)) {
+  if (!emitidasEnCrudo.has(v.key) && !usadasEnScripts.has(v.key)) {
     mal(`la colección declara {{${v.key}}} y ninguna petición ni script la usa`);
   }
 }
@@ -94,7 +107,7 @@ for (const v of entorno.values ?? []) {
   // `baseUrl` y `apiKey` son del cliente, no de las peticiones: no las emite
   // nadie a propósito, y exigirles uso las convertiría en un falso positivo.
   if (v.key === "baseUrl" || v.key === "apiKey") continue;
-  if (!emitidas.has(v.key) && !usadasEnScripts.has(v.key)) {
+  if (!emitidasEnCrudo.has(v.key) && !usadasEnScripts.has(v.key)) {
     mal(`el entorno declara {{${v.key}}} y ninguna petición ni script la usa`);
   }
 }

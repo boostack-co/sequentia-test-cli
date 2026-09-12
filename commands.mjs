@@ -73,6 +73,9 @@ export const API_URL_KEY = "SQ_TEST_API_URL";
  */
 export const COLLECTION_URL_KEY = "SQ_TEST_COLLECTION_URL";
 
+/** Dónde sirve cada celda la colección con la que fue construida (Sequentia#6195). */
+export const COLLECTION_PATH = "/.well-known/postman-collection.json";
+
 // ---------------------------------------------------------------------------
 // Parser de .env
 // ---------------------------------------------------------------------------
@@ -179,16 +182,20 @@ export function resolveConfig(flags = {}) {
  * conseguirla. Lo usan el CLI y el menú: antes cada uno tenía su copia, y la
  * del menú era un renglón que no decía ni la forma de la URL ni dónde leer.
  */
-export function resolveCollectionUrl() {
+export function resolveCollectionUrl(flags = {}) {
   const url = leerConfig().pick(COLLECTION_URL_KEY);
   if (url) return url;
-  throw new UsageError(
-    `Falta ${COLLECTION_URL_KEY}: la URL de lectura de la colección publicada.\n` +
-      "  Es la de la API de Postman con su access key, algo con la forma\n" +
-      "  https://api.postman.com/collections/<uid>?access_key=<key>\n" +
-      "  Mientras la colección no esté publicada, este comando no tiene con qué contrastar.\n" +
-      "  Ver collection/PUBLISHING.md.",
-  );
+  // Sin variable, se DERIVA de la celda que ya está configurada. No hay default
+  // fijo a propósito: uno traería la coordenada de una celda concreta a un repo
+  // público —lo que el job `secretos` del CI rechaza— y haría que todos
+  // contrastaran contra una celda ajena en vez de la suya.
+  //
+  // Derivarla es además lo correcto, no solo lo cómodo: cada celda sirve la
+  // colección generada desde SU propio build, así que el artefacto y el
+  // servidor son la misma versión. Contrastar contra otra celda compararía
+  // contra un contrato que no es el que uno va a llamar.
+  const { apiUrl } = resolveApiConfig(flags, { requireToken: false });
+  return `${apiUrl}${COLLECTION_PATH}`;
 }
 
 /**
@@ -247,8 +254,8 @@ export function plantillaEnv() {
     "# No es el endpoint MCP de abajo: suele ser otro host.",
     `${API_URL_KEY}=`,
     "",
-    "# Opcional: la colección publicada en Postman, para  api collection --check .",
-    "# Lleva su access key, que es de solo lectura y de una sola colección.",
+    "# Opcional: pisa el origen del que se baja la colección para  api collection --check .",
+    "# Sin esto se deriva de tu celda: <SQ_TEST_API_URL>/.well-known/postman-collection.json",
     `# ${COLLECTION_URL_KEY}=`,
     "",
     "# Para  api loop : TU modelo. Cualquier /chat/completions compatible con",
