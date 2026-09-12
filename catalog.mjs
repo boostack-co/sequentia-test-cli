@@ -124,6 +124,32 @@ function sustituir(valor, vars) {
   return valor;
 }
 
+/**
+ * ¿Esta petición la ejecuta el carril REST de este CLI?
+ *
+ * El artefacto canónico es UNO y sirve a dos públicos: una persona en Postman,
+ * que puede tocar MCP a mano —su carpeta trae el handshake y arrastra el
+ * `mcp-session-id`, que es la parte difícil—, y este CLI, que no. MCP acá no es
+ * otra ruta: es otro transporte —JSON-RPC sobre otro host, con sesión y SSE— y
+ * este cliente habla REST. Además sería redundante: el carril MCP del CLI tiene
+ * cliente, menú y comandos propios que no leen esta colección.
+ *
+ * Se lee del bloque `sq-test`, y su AUSENCIA significa `rest`: la colección
+ * escrita a mano no traía el campo, y el default tiene que ser el que no rompe
+ * lo que ya andaba. Se mira con una lectura tolerante —no `extraerMetadata`—
+ * porque descartar va antes de validar, y una petición de otro transporte no
+ * tiene por qué cumplir las reglas del carril REST.
+ */
+function esRest(item) {
+  const m = String(item.request?.description ?? "").match(/```sq-test\n([\s\S]*?)\n```/);
+  if (!m) return true; // sin bloque: que falle después, con el mensaje que explica qué falta
+  try {
+    return (JSON.parse(m[1]).transport ?? "rest") === "rest";
+  } catch {
+    return true; // JSON inválido: idem — el error bueno lo da `extraerMetadata`
+  }
+}
+
 /** Convierte una petición de la colección en una entrada del catálogo. */
 function entradaDe(nombre, item) {
   const req = item.request ?? {};
@@ -216,8 +242,18 @@ export function catalogoDesde(coleccion) {
   const entradas = new Map();
   const recorrer = (items, prefijo) => {
     for (const it of items ?? []) {
-      if (it.item) recorrer(it.item, `${prefijo}${it.name} / `);
-      else entradas.set(prefijo + it.name, entradaDe(prefijo + it.name, it));
+      if (it.item) {
+        recorrer(it.item, `${prefijo}${it.name} / `);
+        continue;
+      }
+      const nombre = prefijo + it.name;
+      // El descarte va ANTES de validar, no después: una petición de otro
+      // transporte no cumple —ni tiene por qué— las reglas del carril REST, y
+      // empezó a llegar en la colección generada, donde MCP viaja como
+      // `{{mcpUrl}}` con cuerpo JSON-RPC. Validarla primero abortaría la carga
+      // ENTERA por algo que este cargador ni siquiera va a ejecutar.
+      if (!esRest(it)) continue;
+      entradas.set(nombre, entradaDe(nombre, it));
     }
   };
   recorrer(coleccion.item, "");
