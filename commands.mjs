@@ -120,9 +120,21 @@ export const USER_ENV_FILE = join(homedir(), ".config", "sq-test", ".env");
 export function envFileCandidates() {
   const files = [resolve(HERE, ".env"), USER_ENV_FILE, resolve(process.cwd(), ".env")];
   if (process.env.SQ_TEST_ENV_FILE) files.push(resolve(process.env.SQ_TEST_ENV_FILE));
-  // Corriendo desde el repo, el directorio de instalación y el actual son el
-  // mismo archivo: sin deduplicar se leía dos veces y se reportaba repetido.
-  return [...new Set(files)];
+  // Se deduplica conservando la ÚLTIMA aparición, no la primera, porque en esta
+  // lista la posición ES la prioridad.
+  //
+  // Un `Set` normal conserva la primera, y eso tenía una consecuencia que nadie
+  // buscó: trabajando DESDE el repo, el directorio de instalación y el actual
+  // son el mismo archivo, así que el `.env` del proyecto colapsaba en la ranura
+  // de instalación — la de MENOR prioridad— y `~/.config/sq-test/.env` lo
+  // pisaba. El comando salía con éxito contra la celda equivocada y con la key
+  // equivocada, sin decir nada: el peor modo de fallo posible para una
+  // herramienta cuyo trabajo es decirte contra qué estás hablando.
+  //
+  // No se veía desde fuera del repo, que es donde corren los tests, ni con `-g`,
+  // donde las tres rutas son distintas. Se ve exactamente en el flujo que el
+  // README recomienda: clonar, copiar `.env.example` a `.env` y trabajar ahí.
+  return [...new Set(files.slice().reverse())].reverse();
 }
 
 /**
