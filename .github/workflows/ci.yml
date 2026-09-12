@@ -147,6 +147,22 @@ jobs:
           # deja pasar; una politica mal escrita manda algo que nadie evaluo.
           node loop-smoke.mjs
 
+      # El paquete que se publica, corrido de verdad. Es lo unico que ve lo que
+      # `files` deja afuera: el CI corre desde el checkout, donde todo existe.
+      # La 2.2.0 se iba a publicar sin `errores.mjs` ni `http-comun.mjs`, y el
+      # paquete moria en ERR_MODULE_NOT_FOUND antes de imprimir --help.
+      - name: El paquete empaquetado arranca
+        shell: bash
+        run: |
+          set -e
+          dest="$(mktemp -d)"
+          npm pack --pack-destination "$dest" > /dev/null
+          tar -xzf "$dest"/*.tgz -C "$dest"
+          cd "$dest/package"
+          node sq-test.mjs --help > /dev/null
+          node sq-test.mjs api list > /dev/null
+          echo "ok: el paquete arranca y lee su coleccion"
+
       - name: Casos que deben fallar (y con qué código)
         shell: bash
         env:
