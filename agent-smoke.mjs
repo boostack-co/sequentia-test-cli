@@ -13,7 +13,7 @@
  *   node agent-smoke.mjs
  */
 import { AGENT_COMMANDS } from "./agent.mjs";
-import { cargarCatalogo } from "./catalog.mjs";
+import { cargarCatalogo, fraseDeEfecto } from "./catalog.mjs";
 
 let fallos = 0;
 const comprobar = (titulo, calcular, esperado) => {
@@ -57,6 +57,41 @@ const cubiertas = new Set(Object.values(AGENT_COMMANDS).map(rutaDe));
 comprobar(
   "toda petición /agent/* de la colección tiene atajo",
   () => agenticas.filter((e) => !cubiertas.has(e.ruta.replace("{{kbId}}", MARCA))).map((e) => e.nombre),
+  [],
+);
+
+// --- Y que la frase de la guarda no se coma el texto de la otra fuente -------
+//
+// El aviso de `--yes` se armaba como `persiste ${persists}`, y las dos fuentes
+// escriben ese campo distinto: acá es un sintagma en castellano pensado para
+// encajar detrás de «persiste», y en la colección —que genera la plataforma— es
+// una oración en inglés. Interpolarla producía «persiste a DRAFT article … y
+// gasta créditos de IA», agramatical, en el único mensaje de la app que decide
+// si alguien gasta plata o escribe en la KB de un cliente.
+//
+// La afirmación es sobre la FORMA, no sobre el texto: la oración se arma sólo
+// con palabras nuestras y el campo ajeno va aparte. Así sigue valiendo cuando
+// el vendorado cambie ese texto, que es lo que va a pasar.
+const conEfecto = [
+  ...Object.entries(AGENT_COMMANDS).map(([n, s]) => [`api ${n}`, s]),
+  ...[...entradas].map(([n, e]) => [n, e]),
+].filter(([, s]) => s.persists || s.spendsCredits);
+
+comprobar(
+  "ninguna frase de guarda interpola el texto de `persists`",
+  () => conEfecto.filter(([, s]) => s.persists && fraseDeEfecto(s).que.includes(String(s.persists).trim())).map(([n]) => n),
+  [],
+);
+
+comprobar(
+  "y la frase sale sólo de las dos cláusulas nuestras",
+  () => [...new Set(conEfecto.map(([, s]) => fraseDeEfecto(s).que))].sort(),
+  ["deja algo escrito", "deja algo escrito y gasta créditos de IA", "gasta créditos de IA"],
+);
+
+comprobar(
+  "lo que `persists` dice se conserva entero, como detalle",
+  () => conEfecto.filter(([, s]) => s.persists && fraseDeEfecto(s).detalle !== String(s.persists).trim()).map(([n]) => n),
   [],
 );
 
