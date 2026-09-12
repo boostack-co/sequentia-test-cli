@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ApiTransportError } from "./api-client.mjs";
 import { UsageError, buildCommandLine, buscarKb, esUuid, resolveKbIdApi, resolverKbsDeFlags } from "./commands.mjs";
+import { cargarCatalogo } from "./catalog.mjs";
 import { EXIT_TOOL_ERROR, EXIT_TRANSPORT, EXIT_USAGE, describirError } from "./errores.mjs";
 import { McpToolError } from "./mcp-client.mjs";
 
@@ -164,6 +165,84 @@ await comprobar("un TypeError es inesperado y conserva el stack", () => {
   const d = describirError(new TypeError("boom"));
   return [d.clase, /TypeError: boom/.test(d.lineas[0]), /commands-smoke/.test(d.lineas[0])];
 }, ["inesperado", true, true]);
+
+// --- Las guardas de `api run`, con el nombre SACADO DEL CATÁLOGO -------------
+//
+// El CI las cubría escribiendo el nombre a mano, y al vendorar la colección
+// (#48) dos casos se pudrieron sin que nada avisara, porque los dos salen con 2
+// y `esperar` sólo mira el código:
+//
+//   api run 'Analytics'                    decía "ambiguo"  → hoy resuelve ÚNICO
+//   api run '1. Retrieve' --var kbId=x     decía "cuesta"   → ese nombre ya no existe
+//
+// El segundo dejó sin cobertura el guarda que impide gastar créditos sin
+// confirmar, que es el más caro de perder. Y va a volver a pasar: los nombres
+// ahora los escribe el generador de la plataforma y cambian en cada vendorado.
+//
+// Así que el nombre se DERIVA de la metadata —una que cuesta, una que escribe,
+// un prefijo que de verdad es ambiguo— y se afirma el MOTIVO, no sólo el
+// código. Si mañana no hubiera ninguna petición que cobre, eso también es un
+// hallazgo y se reporta en vez de pasar en verde.
+const { entradas } = cargarCatalogo();
+const porEfecto = (p) => [...entradas.values()].find(p) ?? null;
+const queCuesta = porEfecto((e) => e.spendsCredits && !e.persists);
+const queEscribe = porEfecto((e) => e.persists);
+
+// Un prefijo ambiguo de verdad: el nombre corto que comparten dos peticiones de
+// carpetas distintas. Derivado, porque cuál es depende de la colección del día.
+const porNombreCorto = new Map();
+for (const e of entradas.values()) {
+  const corto = e.nombre.split(" / ").at(-1);
+  porNombreCorto.set(corto, (porNombreCorto.get(corto) ?? 0) + 1);
+}
+const ambiguo = [...porNombreCorto].find(([, n]) => n > 1)?.[0] ?? null;
+
+const correrCli = (...args) =>
+  spawnSync(process.execPath, [fileURLToPath(new URL("./sq-test.mjs", import.meta.url)), ...args], {
+    encoding: "utf8",
+    env: { ...process.env, SQ_TEST_ENV_FILE: join(TRABAJO, "no-existe.env"), SQ_TEST_API_URL: "https://celda.invalid" },
+  });
+
+await comprobar("la colección declara al menos una petición que cuesta y una que escribe", [Boolean(queCuesta), Boolean(queEscribe)], [true, true]);
+await comprobar("y al menos un nombre corto ambiguo, para poder probar el desempate", Boolean(ambiguo), true);
+
+if (queCuesta) {
+  const r = correrCli("api", "run", queCuesta.nombre, "--var", "kbId=x");
+  await comprobar(
+    `"${queCuesta.nombre}" sin --yes: sale 2 Y avisa del cargo`,
+    [r.status, /créditos/.test(r.stderr), /--yes/.test(r.stderr)],
+    [EXIT_USAGE, true, true],
+  );
+}
+if (queEscribe) {
+  // Se afirma que el aviso dice QUÉ deja escrito, no cómo lo redacta: el texto
+  // sale de la colección y cambia en cada vendorado, pero que llegue al usuario
+  // es lo que hace útil la confirmación.
+  const r = correrCli("api", "run", queEscribe.nombre, "--var", "kbId=x");
+  await comprobar(
+    `"${queEscribe.nombre}" sin --yes: sale 2 Y dice qué deja escrito`,
+    [r.status, r.stderr.includes(String(queEscribe.persists).trim()), /--yes/.test(r.stderr)],
+    [EXIT_USAGE, true, true],
+  );
+}
+if (ambiguo) {
+  const r = correrCli("api", "run", ambiguo);
+  await comprobar(`"${ambiguo}" es ambiguo: sale 2 Y no elige por vos`, [r.status, /coincide con \d+ peticiones/.test(r.stderr)], [EXIT_USAGE, true]);
+}
+
+// Y los nombres que el CI TODAVÍA escribe a mano: que sigan resolviendo a una
+// sola petición. Hoy son correctos —los verifiqué uno por uno—, y lo que cierra
+// esta aserción es que dejen de serlo en silencio, que es exactamente lo que
+// pasó con los dos de arriba: un nombre que ya no existe hace que su caso siga
+// saliendo 2, por «no coincide», y el guarda que decía probar queda desarmado.
+const NOMBRES_EN_EL_CI = ["Get knowledge base", "Health"];
+await comprobar(
+  "los nombres que el CI escribe a mano siguen resolviendo a UNA sola petición",
+  () =>
+    NOMBRES_EN_EL_CI.map((n) => [n, [...entradas.keys()].filter((k) => k.toLowerCase().includes(n.toLowerCase())).length])
+      .filter(([, n]) => n !== 1),
+  [],
+);
 
 console.log(fallos ? `\n${fallos} fallos` : "\nTodo en verde.");
 process.exitCode = fallos ? 1 : 0;

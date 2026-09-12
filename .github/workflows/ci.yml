@@ -195,8 +195,12 @@ jobs:
           echo "ok  0  node sq-test.mjs api list"
           esperar 2 node sq-test.mjs api run                                   # falta el nombre
           esperar 2 node sq-test.mjs api run 'no existe'                       # no está en la colección
-          esperar 2 node sq-test.mjs api run 'Analytics'                       # ambiguo: no elige por vos
-          esperar 2 node sq-test.mjs api run '1. Retrieve' --var kbId=x        # gasta creditos, falta --yes
+          # Los dos casos que iban aca —el ambiguo y el que cuesta— se escribian
+          # con el nombre a mano y se pudrieron al vendorar la coleccion (#48):
+          # 'Analytics' dejo de ser ambiguo y '1. Retrieve' dejo de existir. Los
+          # dos seguian saliendo con 2, asi que nadie se entero. Viven ahora en
+          # commands-smoke.mjs, con el nombre DERIVADO del catalogo y afirmando
+          # el motivo y no solo el codigo.
           esperar 2 node sq-test.mjs api run 'Get knowledge base'              # falta --var kbId
           esperar 2 node sq-test.mjs api run 'Health' --var suelto             # --var mal formado
           esperar 2 node sq-test.mjs api run 'Health' --var baseUrl=http://x   # variable reservada
