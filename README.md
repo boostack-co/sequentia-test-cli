@@ -420,6 +420,8 @@ Los booleanos (`--json`, `--raw`, `--verbose`, `--yes`) no toman valor: se usan 
 
 El `1` es siempre lo mismo: **la operación se hizo y el resultado es negativo**. No lo usa `api doctor`, que sale con `0` aunque falten scopes — ahí el informe *es* el resultado, y una key incompleta no es un fallo del comando.
 
+**`api doctor` sale `0` también cuando la celda rechaza la key entera** (`Credencial: ✘ la key no fue aceptada (401)`), y eso vale decirlo porque es lo único del CLI que rompe la simetría: esa misma key en `api run` sale `3`. El criterio de `doctor` no es «¿la credencial sirve?» sino «¿pude diagnosticarla?», y una key muerta es un diagnóstico exitoso, no un comando fallido. La consecuencia práctica: **`api doctor && desplegar` no es una compuerta de salud** — pasa con la key muerta. Para eso, leé el informe (`--json` trae `credencial`), o usá una petición de verdad, que sí sale `3`.
+
 Pensado para scriptear: `node.exe sq-test.mjs search --kb X --q Y --json | jq -r '.[].slug'`.
 
 > **En Git Bash interactivo usá `node.exe`, no `node`, cuando pipees.**
