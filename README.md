@@ -181,7 +181,7 @@ node sq-test.mjs api run 'Get knowledge base' --var kbId=<slug o uuid>
 
 ### El ejecutor genérico
 
-`api run` es al carril REST lo que `call <tool>` es al MCP: **la colección son datos**, así que agregar un endpoint no requiere tocar el CLI. El nombre se puede dar completo (`Agent API / 1. Retrieve`), solo el de la petición (`1. Retrieve`) o como fragmento; si coincide con varias, **no elige por vos** — las enumera. En un banco de pruebas correr otra cosa de la que se pidió invalida el experimento, y acá hay peticiones que escriben.
+`api run` es al carril REST lo que `call <tool>` es al MCP: **la colección son datos**, así que agregar un endpoint no requiere tocar el CLI. El nombre se puede dar completo (`Agent API / Retrieve (bring your own LLM)`), solo el de la petición (`Retrieve (bring your own LLM)`) o como fragmento (`Retrieve`); si coincide con varias, **no elige por vos** — las enumera. En un banco de pruebas correr otra cosa de la que se pidió invalida el experimento, y acá hay peticiones que escriben.
 
 Tres guardas corren **antes de cualquier red**:
 
@@ -265,7 +265,7 @@ Y dice **dónde se consigue lo que falta**: las pantallas de creación de keys *
 **Antes de eso dice si hace falta conseguirlo, que es la pregunta anterior.** La colección declara los scopes de cada petición **en OR** —alcanza con tener uno—, así que el informe cruza los que faltan o quedaron sin sondear contra los confirmados:
 
 ```
-· agent.retrieve   solo se alcanza por "Agent API / 1. Retrieve", que gasta créditos · pero rag.query abre esas peticiones igual: no hace falta
+· agent.retrieve   solo se alcanza por "Agent API / Retrieve (bring your own LLM)", que gasta créditos · pero rag.query abre esas peticiones igual: no hace falta
 ```
 
 Esa línea es la diferencia entre pedir un permiso y darse cuenta de que ya se tiene el equivalente. Los `agent.*` que cobran son a la vez los que **nunca** se pueden sondear y los que tienen una alternativa más amplia, así que sin ella el informe deja abierta justo la pregunta que se hace quien los mira. Y solo aparece con la alternativa **confirmada**: tranquilizar de más manda a no pedir lo que sí se necesita, que es el defecto opuesto y no es mejor.
@@ -365,7 +365,7 @@ Cada petición lleva en su descripción un bloque `sq-test` legible por máquina
 
 **El original lo genera la plataforma desde sus routers; lo de acá es una copia vendorada.** Cada celda sirve la colección con la que fue construida en `/.well-known/postman-collection.json`, sin credencial, así que el artefacto y el servidor son el mismo build. `api collection --check` **deriva esa URL de tu celda** y reporta la deriva **en los dos sentidos** — lo que el CLI empaqueta y la celda no sirve, y al revés. Sale con `1` si hay deriva, así que puede romper un pipeline.
 
-**La colección está publicada** en [este workspace público](https://www.postman.com/egonzalez-834a9dbf-7945626/sequentia-api). Para contrastar contra ella hace falta una *access key* de lectura propia en `SQ_TEST_COLLECTION_URL` — no viene por default a propósito: es un token, y un token en un repo público es algo que alguien rota algún día. Cómo se saca está en [`collection/PUBLISHING.md`](collection/PUBLISHING.md).
+**Un workspace de Postman ya no es parte del ciclo.** Quien quiera uno lo importa desde la URL de su celda; `SQ_TEST_COLLECTION_URL` existe solo para pisar el origen del `--check` (un fork, una celda de pruebas). Ver [`collection/PUBLISHING.md`](collection/PUBLISHING.md).
 
 Compara contra **el checkout en el que estás parado**, no contra `main`: en una rama atrasada va a reportar deriva que no es real. Es lo correcto —contrasta lo que ESE árbol empaqueta— pero conviene saberlo antes de asustarse.
 
@@ -376,7 +376,7 @@ node sq-test.mjs api collection --refresh    # además guarda lo traído en ~/.c
 
 Compara el **catálogo**, no el JSON crudo: Postman le agrega ids y marcas de tiempo a lo que publica, y un diff textual estaría siempre en rojo — que es la forma más común de que un control deje de controlar. Se comparan método, ruta, cuerpo, la metadata que gobierna `--yes`, la descripción y las variables de colección.
 
-Si la access key se rota o se revoca, **lo único que se rompe es este comando**: el CLI sigue andando con la colección empaquetada. Es a propósito, y es la razón de que el original viva en el repo.
+Si la celda no responde, **lo único que se rompe es este comando**: el CLI sigue andando con la colección empaquetada. Es a propósito, y es la razón de que el original viva en el repo.
 
 `collection-lint.mjs` corre en el CI, sin credenciales ni red, y rechaza una colección que emita una variable que nadie define, que declare una que nadie usa, que traiga un default de URL **alcanzable**, que lleve un valor en `apiKey`, o cuyo `collection/README.md` contradiga la metadata — esa última guarda existe porque la contradicción ya pasó.
 
