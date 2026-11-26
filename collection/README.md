@@ -2,17 +2,18 @@
 
 Las superficies que aceptan **API key**: la REST bajo `/api/v1`, incluido el carril agéntico, y un ejemplo del servidor MCP. Se importa, se rellenan tres variables y corre contra tu workspace.
 
-Es una **copia vendorada** del artefacto que genera la plataforma (ver [PUBLISHING.md](PUBLISHING.md)) y el mismo que usa el CLI de este repo como **catálogo ejecutable**. Trae cinco carpetas:
+Es una **copia vendorada** del artefacto que genera la plataforma (ver [PUBLISHING.md](PUBLISHING.md)) y el mismo que usa el CLI de este repo como **catálogo ejecutable**. Trae seis carpetas:
 
 | Carpeta | Qué tiene | ¿La ejecuta el CLI? |
 | :--- | :--- | :--- |
 | `System` | `Health`, sin credencial | sí |
 | `Knowledge Bases` | lectura de KBs y artículos, búsqueda léxica, `Analytics summary` y `Knowledge gaps` | sí |
-| `Agent API` | el carril agéntico: `Retrieve`, `Verify`, `Query`, `Feedback`, `Report a knowledge gap`, `Index status` | sí |
+| `Agent API` | el carril agéntico: `Retrieve`, `Verify`, `Query`, `Feedback`, `Report a knowledge gap`, `Record an agent decision`, `Index status` | sí |
 | `Ingest (iPaaS)` | crear un borrador, buscar artículos, listar KBs | sí |
+| `Bulk article edits` | ediciones en lote de hasta 200 artículos de una KB: renombrar, mover de categoría, deprecar | sí |
 | `MCP` | el handshake de MCP y tres `tools/call` de ejemplo, contra `{{mcpUrl}}` | **no**: es otro transporte y el CLI lo cubre por su carril propio |
 
-Lo que sigue sobre escrituras, créditos y scopes habla de las cuatro carpetas REST, que son las que el CLI ejecuta. `node sq-test.mjs api list` imprime ese catálogo con los nombres exactos.
+Lo que sigue sobre escrituras, créditos y scopes habla de las cinco carpetas REST, que son las que el CLI ejecuta. `node sq-test.mjs api list` imprime ese catálogo con los nombres exactos.
 
 ## Puesta en marcha
 
@@ -35,21 +36,27 @@ El default de `baseUrl` es **inalcanzable a propósito** (`.invalid`, reservado 
 
 ## Antes de darle a «Run folder»
 
-En las carpetas REST, **tres peticiones escriben** en tu workspace y no hay ninguna que limpie:
+En las carpetas REST, **siete peticiones escriben** en tu workspace y no hay ninguna que limpie:
 
 | Petición | Qué deja |
 | :--- | :--- |
 | `Agent API → Report a knowledge gap` | una fila de hueco de conocimiento en la cola de triage |
 | `Agent API → Feedback` | una fila de feedback de utilidad en la analítica de la KB |
-| **`Ingest (iPaaS) → Create a draft article`** | **un artículo BORRADOR en la KB** — sin publicar, pero contenido real que alguien tiene que borrar. Es el único endpoint público que escribe contenido |
+| `Agent API → Record an agent decision` | una fila `agent.decision_recorded` en la auditoría del workspace y, si la decisión es `escalated`, una escalada en Measure results |
+| **`Ingest (iPaaS) → Create a draft article`** | **un artículo BORRADOR en la KB** — sin publicar, pero contenido real que alguien tiene que borrar. Es el único endpoint público que **crea** contenido |
+| **`Bulk article edits → Bulk rename articles`** | **títulos nuevos en artículos reales**, publicados incluidos (una versión por artículo) |
+| **`Bulk article edits → Bulk move articles to a category`** | **artículos movidos de categoría**, todo o nada |
+| **`Bulk article edits → Bulk deprecate articles`** | **artículos DEPRECADOS**: los publicados salen de búsqueda, respuestas y Help Center hasta que alguien los republique, y la API no republica |
 
-**Cuatro gastan créditos** de IA: las tres de `Agent API` —`Retrieve (bring your own LLM)`, `Verify a claim` y `Query (Sequentia synthesises)`— más `Ingest (iPaaS) → Create a draft article`. La que sorprende es `Retrieve`: **los gasta aunque no sintetice nada**, porque embebe la consulta en cada llamada.
+Las tres de `Bulk article edits` traen ids de relleno que responden `404` y no escriben nada: escriben de verdad recién cuando se reemplazan por ids reales. La guarda de `--yes` del CLI las trata igual que a las demás, porque lo que decide es la metadata y no el relleno.
+
+**Seis gastan créditos** de IA: las tres de `Agent API` —`Retrieve (bring your own LLM)`, `Verify a claim` y `Query (Sequentia synthesises)`—, `Ingest (iPaaS) → Create a draft article`, y `Bulk rename articles` y `Bulk move articles to a category`, que reindexan los publicados. `Bulk deprecate articles` escribe pero no cobra. La que sorprende es `Retrieve`: **los gasta aunque no sintetice nada**, porque embebe la consulta en cada llamada.
 
 La carpeta `MCP` no escribe, pero sus tres `tools/call` declaran que gastan créditos: corrida desde Postman con «Run folder», también cobra.
 
 Un caso que sorprende al revés: `Knowledge Bases → Query knowledge base (lexical)` **no gasta créditos** pese a llamarse *query* y pedir `rag.query`. Es búsqueda léxica.
 
-Apuntá esto a un workspace que estés dispuesto a dejar marcado, o corré la carpeta `Knowledge Bases` sola, que es toda de lectura y no cobra.
+Apuntá esto a un workspace que estés dispuesto a dejar marcado, o corré la carpeta `Knowledge Bases` sola, que es toda de lectura y no cobra. `Bulk article edits` no se corre con «Run folder» salvo a propósito.
 
 ## Ninguna key creada con un clic corre la colección entera
 
@@ -59,11 +66,11 @@ Los formularios de Admin Studio **no son superconjunto entre sí**, así que hay
 | :--- | :--- | :--- |
 | `Knowledge Bases → Analytics summary` | `analytics.read` | el formulario de APIs generales |
 | `Knowledge Bases → Knowledge gaps` | `gaps.read` | el formulario de APIs generales |
-| `Ingest (iPaaS) → Create a draft article` | `articles.write` | solo el preset iPaaS de Account Secrets |
+| `Ingest (iPaaS) → Create a draft article` y las tres de `Bulk article edits` | `articles.write` | solo el preset iPaaS de Account Secrets |
 
 > `gaps.read` **no** es lo mismo que `gaps.write`. Leer la cola sale del formulario de APIs generales; reportar un hueco (`gaps.write`), del de Agent Playground. Ninguno de los dos da el otro.
 
-Y `Agent API → Feedback` es el único endpoint del carril **sin scope de reserva**: `agent.feedback` es la única cadena que lo abre, y solo lo ofrece el formulario de Agent Playground. Una key que corre todo lo demás puede fallar exactamente ahí.
+Y dos endpoints del carril no tienen **scope de reserva**: `Agent API → Feedback` (`agent.feedback`, que solo ofrece el formulario de Agent Playground) y `Agent API → Record an agent decision` (`agent.write_audit`). Cada uno se abre con una sola cadena, así que una key que corre todo lo demás puede fallar exactamente ahí.
 
 ## El bloque `sq-test`
 
@@ -118,4 +125,4 @@ Los diez minutos son política de esta colección, no del servidor.
 
 ## Cómo se mantiene
 
-Ver [PUBLISHING.md](PUBLISHING.md). En corto: **el original vive en este repo** y lo publicado en Postman es una copia. No se edita en la interfaz de Postman.
+Ver [PUBLISHING.md](PUBLISHING.md). En corto: **el original lo genera la plataforma** y cada celda lo sirve en `/.well-known/`; esta carpeta es una copia vendorada que entra por PR. No se edita a mano ni en la interfaz de Postman.

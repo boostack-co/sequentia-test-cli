@@ -101,7 +101,7 @@ jobs:
             const esperado = {
               "2.1": "health", "2.2": "list", "2.3": "run",
               "3.1": "retrieve", "3.2": "query", "3.3": "verify",
-              "3.4": "index-status", "3.5": "gap-report", "3.6": "feedback",
+              "3.4": "index-status", "3.5": "gap-report", "3.6": "feedback", "3.7": "decision",
               "4.1": "loop", "4.2": "loop-no-generate",
               "5.1": "doctor",
               "6.1": "collection-check", "6.2": "collection-refresh",
@@ -236,6 +236,7 @@ jobs:
           # `index-status` no gasta ni escribe, asi que no acepta --yes: una
           # opcion aceptada es una opcion usada.
           esperar 2 node sq-test.mjs api index-status --kb X --yes
+          esperar 2 node sq-test.mjs api decision --decision sent              # persiste, falta --yes
 
           # Los topes. Estos SI necesitan una celda configurada, porque la
           # validacion del cuerpo corre despues de resolver la config; sin
@@ -253,6 +254,10 @@ jobs:
           # Sin id recordado, `feedback` se niega: el campo es opcional en el
           # esquema, asi que un vacio escribiria una fila ligada a nada.
           esperar 2 node sq-test.mjs api feedback --kb X --rating helpful --yes "${celda[@]}"
+          esperar 2 node sq-test.mjs api decision --yes "${celda[@]}"                                  # falta --decision
+          esperar 2 node sq-test.mjs api decision --decision quizas --yes "${celda[@]}"                # fuera del enum
+          esperar 2 node sq-test.mjs api decision --decision sent --evidence '[1]' --yes "${celda[@]}" # evidence no es objeto
+          esperar 2 node sq-test.mjs api decision --decision sent --evidence '{x' --yes "${celda[@]}"  # evidence no es JSON
           # `api doctor` no toma opciones: lo que necesita sale de la config.
           # Un flag aceptado y no usado es el fallo silencioso que este CLI
           # rechaza en todas partes.

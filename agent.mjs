@@ -1,5 +1,5 @@
 /**
- * Los seis endpoints del carril agéntico, por nombre.
+ * Los siete endpoints del carril agéntico, por nombre.
  *
  * El ejecutor genérico (`api run`) ya los puede correr. Estos existen por tres
  * razones que el genérico no puede dar:
@@ -34,6 +34,11 @@ export const VERIFY_CLAIM_MAX = 4000;
 export const QUERY_MAX_KBS = 10;
 export const RATINGS = ["helpful", "not_helpful"];
 export const PRIORITIES = ["low", "medium", "high"];
+/** Lo que el agente hizo con una respuesta (`/agent/decision`, D113.4). */
+export const DECISIONS = ["sent", "reformulated", "escalated", "blocked"];
+export const DECISION_VERDICT_MAX = 200;
+/** Tope del servidor para `evidence`, medido como JSON serializado en bytes. */
+export const DECISION_EVIDENCE_MAX_BYTES = 8 * 1024;
 
 /**
  * Cuánto vale un `retrievalId` capturado. Es política de este CLI, no del
@@ -290,7 +295,57 @@ export const AGENT_COMMANDS = {
       );
     },
   },
+
+  // El gemelo REST de la herramienta MCP `record_decision`: deja en la
+  // auditoría qué hizo el agente con una respuesta. La KB es opcional en el
+  // servidor, así que acá también; si viene, se valida contra la allowlist de
+  // la key. Sin idempotencia: el servidor ya no cuenta dos veces la misma
+  // escalada (misma key, KB y afirmación en 10 min), y la fila de auditoría de
+  // cada intento es lo que la auditoría quiere ver.
+  decision: {
+    metodo: "POST",
+    ruta: "/agent/decision",
+    help: `Registra qué hizo el agente con una respuesta.  --decision ${DECISIONS.join("|")} [--kb] [--claim] [--verdict] [--evidence '{…}'] --yes`,
+    opts: ["decision", "kb", "claim", "verdict", "evidence"],
+    // Sin scope de reserva, como `feedback`: `agent.write_audit` es la única
+    // cadena que lo abre.
+    scopes: ["agent.write_audit"],
+    persists: "una fila agent.decision_recorded en la auditoría del workspace y, si es escalated, una escalada en Measure results",
+    spendsCredits: false,
+    build: (flags) => {
+      required(flags, "decision", DECISIONS.join(", "));
+      const body = { decision: oneOf(flags, "decision", DECISIONS) };
+      put(body, "knowledgeBaseId", flags.kb === undefined ? undefined : String(flags.kb));
+      put(body, "claimText", flags.claim === undefined ? undefined : maxLen(String(flags.claim), VERIFY_CLAIM_MAX, "claim"));
+      put(body, "verdict", flags.verdict === undefined ? undefined : maxLen(String(flags.verdict), DECISION_VERDICT_MAX, "verdict"));
+      return put(body, "evidence", evidenciaDe(flags));
+    },
+  },
 };
+
+/**
+ * `--evidence` llega como texto y el servidor quiere un objeto JSON de hasta
+ * 8 KiB serializado. Validarlo acá convierte el 400 en un mensaje que dice qué
+ * está mal; un array o un escalar también son JSON válido y el esquema los
+ * rechaza igual.
+ */
+function evidenciaDe(flags) {
+  if (flags.evidence === undefined || flags.evidence === "") return undefined;
+  let v;
+  try {
+    v = JSON.parse(String(flags.evidence));
+  } catch {
+    throw new UsageError(`--evidence tiene que ser un objeto JSON, p. ej. '{"retrievalId":"…"}'`);
+  }
+  if (v === null || typeof v !== "object" || Array.isArray(v)) {
+    throw new UsageError("--evidence tiene que ser un objeto JSON (no un array ni un valor suelto)");
+  }
+  const bytes = Buffer.byteLength(JSON.stringify(v), "utf8");
+  if (bytes > DECISION_EVIDENCE_MAX_BYTES) {
+    throw new UsageError(`--evidence ocupa ${bytes} bytes; el servidor acepta hasta ${DECISION_EVIDENCE_MAX_BYTES}`);
+  }
+  return v;
+}
 
 /** ¿Este comando del carril necesita `--yes`? Misma regla que en la colección. */
 export function agentNecesitaConfirmacion(spec) {

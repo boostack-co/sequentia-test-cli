@@ -656,6 +656,7 @@ const SECCIONES_API = [
       { etiqueta: "Estado del índice", alias: "index-status", agente: "index-status" },
       { etiqueta: "Reportar un hueco ⚠", alias: "gap-report", agente: "gap-report" },
       { etiqueta: "Calificar una recuperación ⚠", alias: "feedback", agente: "feedback" },
+      { etiqueta: "Registrar una decisión del agente ⚠", alias: "decision", agente: "decision" },
     ],
   },
   {
@@ -673,7 +674,7 @@ const SECCIONES_API = [
   },
   {
     titulo: "Colección",
-    nota: "el original vive en el repo; Postman es la copia",
+    nota: "el original lo sirve la celda; esto es la copia vendorada",
     items: [
       { etiqueta: "Contrastar con lo publicado", alias: "collection-check", correr: (ctx) => itemCollection(ctx, false) },
       { etiqueta: "Contrastar y actualizar la caché", alias: "collection-refresh", correr: (ctx) => itemCollection(ctx, true) },
