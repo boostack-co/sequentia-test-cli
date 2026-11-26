@@ -4,6 +4,12 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/), v
 
 Los **números del menú son contrato público**: se agregan al final y no se reasignan. Renumerar uno sería un cambio mayor, y hasta hoy no pasó.
 
+## [Sin publicar]
+
+### Cambiado
+
+- **La colección empaquetada se vendoró de nuevo desde la celda.** Solo cambia la descripción general: ya no cierra con una nota interna para quien mantiene el generador, y la lista de scopes que ningún formulario de keys otorga nombra `articles.write` una vez en vez de cuatro. Peticiones, scopes y variables no cambian.
+
 ## [2.2.0] — 2026-11-26
 
 Agrega el **carril agéntico de la API REST** (`/api/v1`) junto al de MCP, que sigue igual. Es `minor` y no `major` porque no se renombró ningún comando ni se movió ningún número de menú.
