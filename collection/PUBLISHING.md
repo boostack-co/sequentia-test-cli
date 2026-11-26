@@ -34,11 +34,29 @@ No hay ninguna coordenada de celda en este repo, y el job `secretos` del CI lo h
 
 **Un cambio no está entregado hasta el paso 4.** Y el paso 3 sigue siendo un PR a propósito: es lo que conserva la revisión y la historia que motivaban el modelo anterior. Lo que se revisa ahora es un diff **generado**, no uno escrito a mano — más fácil de leer, y sin la posibilidad de que alguien invente una ruta.
 
+## Revendorar para un release
+
+Desde la raíz del repo, en una rama nueva desde `dev`:
+
+```bash
+curl -fsS <origen de la celda>/.well-known/postman-collection.json  -o collection/sequentia-api.postman_collection.json
+curl -fsS <origen de la celda>/.well-known/postman-environment.json -o collection/sequentia.postman_environment.json
+node collection-lint.mjs && node collection-sync-smoke.mjs
+SQ_TEST_API_URL=<origen de la celda> node sq-test.mjs api collection --check
+node sq-test.mjs api list | tail -1
+```
+
+- `--check` tiene que decir que no hay deriva: es la prueba de que lo empaquetado es lo que sirve la celda.
+- La última línea de `api list` (cuántas peticiones, cuántas escriben, cuántas gastan créditos) va al PR y, si cambió, a `## [Sin publicar]` del CHANGELOG junto con qué peticiones entraron o salieron. Si cambiaron nombres de peticiones, carpetas o scopes, `collection/README.md` se ajusta en el mismo PR.
+- El PR describe el cambio en términos de peticiones y carpetas, nunca con el origen de la celda: ese va como `<origen de la celda>` también en la salida que se pega.
+
+Publicar la colección en un workspace público de Postman no es parte de este repo ni de su release.
+
 ## Qué NO se hace
 
 **No se edita esta carpeta a mano.** Un arreglo escrito acá lo pisa el siguiente vendorado, en silencio. Si una petición está mal descrita, el arreglo va al catálogo del generador, en el repo de la plataforma.
 
-**No se edita en Postman.** Sigue valiendo por la misma razón de siempre: es una superficie de lectura para clientes. Un cambio hecho ahí aparece en el siguiente `--check` como deriva, y se repone republicando.
+**No se edita en Postman.** Una copia en Postman es una superficie de lectura. Lo que se cambie ahí no vuelve a esta carpeta, y si alguien la usa como origen de `--check` aparece como deriva.
 
 ## Lo que este CLI no ejecuta
 
@@ -47,27 +65,6 @@ La colección canónica trae también la carpeta **MCP**, y está bien que la tr
 Este CLI **la salta**. MCP no es otra ruta sino otro transporte —JSON-RPC sobre otro host, con sesión y SSE— y su carril propio ya lo cubre con cliente, menú y comandos que no leen esta colección. El descarte sale del campo `transport` del bloque `sq-test`, y ocurre **antes** de validar: una petición de otro transporte no cumple ni tiene por qué cumplir las reglas del carril REST, y validarla primero abortaría la carga entera.
 
 **Consecuencia que conviene conocer:** un cambio que solo toque la carpeta MCP **no lo ve `--check`**, porque el comparador trabaja sobre el catálogo y el catálogo la excluye. Es un punto ciego conocido, no un descuido.
-
-## Publicar a Postman, si se quiere
-
-Ya no es parte del ciclo: un cliente puede importar directamente desde la URL de su celda. Si igual se quiere un workspace público como vitrina, se importa **desde esa URL**, y siguen valiendo las tres cosas que aprendimos publicando a mano:
-
-- **El import puede crear una colección PARALELA en vez de reemplazar.** El síntoma son dos entradas con el mismo nombre, y la que conserva el `uid` publicado es la vieja — el enlace que la gente ya tiene sigue apuntando a lo desactualizado.
-- **La interfaz puede ir varios minutos por detrás de la nube.** Un borrado se ve aplicado, se refresca, y vuelve.
-- **Por las dos anteriores, la pantalla no sirve para dar por buena una publicación.** La API sí, y es la que lee `--check`.
-
-Y una cuarta, de la republicación de la 2.2.0 (2026-11-26):
-
-- **El Replace de *Import → Link* tampoco conserva el `uid`.** Crea una colección nueva con otro `uid` y retira la anterior, así que el enlace público corto cambia con cada republicación y el viejo deja de funcionar. Después de cada Replace hay que volver a sacar el enlace de *Share* y actualizar donde se haya publicado. El aviso de la colección paralela sigue valiendo: si quedan dos, se borra la nueva y se repite.
-
-Para comprobar lo publicado sin key, Postman sirve la colección y el entorno públicos en JSON:
-
-```http
-GET https://www.postman.com/_api/collection/<uid>?populate=true
-GET https://www.postman.com/_api/environment/<uid>
-```
-
-Con eso se confirma que el número de carpetas y peticiones coincide con la copia vendorada y que el entorno publicado lleva `apiKey` vacío y `baseUrl` en el `.invalid` por defecto. Es un endpoint interno de la web de Postman, sin contrato: si deja de responder, la vía de respaldo es abrir el enlace público en una ventana privada.
 
 ## Agregar una petición
 
