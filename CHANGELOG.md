@@ -4,7 +4,7 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/), v
 
 Los **números del menú son contrato público**: se agregan al final y no se reasignan. Renumerar uno sería un cambio mayor, y hasta hoy no pasó.
 
-## [2.2.0] — sin publicar
+## [2.2.0] — 2026-11-26
 
 Agrega el **carril agéntico de la API REST** (`/api/v1`) junto al de MCP, que sigue igual. Es `minor` y no `major` porque no se renombró ningún comando ni se movió ningún número de menú.
 
@@ -101,4 +101,4 @@ Sin entrada de changelog: el archivo empieza en 2.2.0 y las versiones anteriores
 
 Primera versión publicada: el carril MCP, con el menú y el CLI.
 
-[2.2.0]: https://github.com/boostack-co/sequentia-test-cli/compare/v2.1.0...HEAD
+[2.2.0]: https://github.com/boostack-co/sequentia-test-cli/releases/tag/v2.2.0
