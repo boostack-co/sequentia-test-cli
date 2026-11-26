@@ -168,8 +168,9 @@ El otro frente de integración de Sequentia: la REST que acepta API key. Entra p
 | `api index-status` | Cuánto de la KB está indexado. `--kb` |
 | `api gap-report` | Reporta que la KB no cubre algo. `--kb --q [--priority] --yes` |
 | `api feedback` | Califica una recuperación que un humano ya leyó. `--kb --rating --yes` |
+| `api decision` | Registra qué hizo el agente con una respuesta (`sent`, `reformulated`, `escalated`, `blocked`). `--decision [--kb] [--claim] [--verdict] [--evidence '{…}'] --yes` |
 | `api doctor` | Perfila la credencial: qué scopes tiene, cuáles no, y dónde se consigue lo que falta. |
-| `api collection --check` | Contrasta la colección empaquetada con la publicada en Postman. `[--refresh]` |
+| `api collection --check` | Contrasta la colección empaquetada con la que sirve tu celda en `/.well-known/`. `[--refresh]` |
 | `api loop` | El bucle: recuperar → generar con **tu** modelo → verificar → decidir. `--kb '<pregunta>'` |
 
 ```bash
@@ -181,7 +182,7 @@ node sq-test.mjs api run 'Get knowledge base' --var kbId=<slug o uuid>
 
 ### El ejecutor genérico
 
-`api run` es al carril REST lo que `call <tool>` es al MCP: **la colección son datos**, así que agregar un endpoint no requiere tocar el CLI. El nombre se puede dar completo (`Agent API / 1. Retrieve`), solo el de la petición (`1. Retrieve`) o como fragmento; si coincide con varias, **no elige por vos** — las enumera. En un banco de pruebas correr otra cosa de la que se pidió invalida el experimento, y acá hay peticiones que escriben.
+`api run` es al carril REST lo que `call <tool>` es al MCP: **la colección son datos**, así que agregar un endpoint no requiere tocar el CLI. El nombre se puede dar completo (`Agent API / Retrieve (bring your own LLM)`), solo el de la petición (`Retrieve (bring your own LLM)`) o como fragmento (`Retrieve`); si coincide con varias, **no elige por vos** — las enumera. En un banco de pruebas correr otra cosa de la que se pidió invalida el experimento, y acá hay peticiones que escriben.
 
 Tres guardas corren **antes de cualquier red**:
 
@@ -195,12 +196,13 @@ Se acepta **con y sin `/api/v1`**. No es una comodidad: cada ruta ya empieza con
 
 ### Los atajos del carril agéntico
 
-`api run` ya puede correr estos seis endpoints. Los atajos existen por lo que el ejecutor genérico no puede dar: **convertir un 400 del servidor en un mensaje entendible sin salir a la red**, y encadenar `retrieve → feedback`.
+`api run` ya puede correr estos siete endpoints. Los atajos existen por lo que el ejecutor genérico no puede dar: **convertir un 400 del servidor en un mensaje entendible sin salir a la red**, y encadenar `retrieve → feedback`.
 
 ```bash
 node sq-test.mjs api retrieve --kb <slug> --q "¿cómo restablezco la contraseña?" --yes
 node sq-test.mjs api feedback --kb <slug> --rating helpful --yes   # usa el id recordado
 node sq-test.mjs api index-status --kb <slug>                      # ni escribe ni cuesta: no pide --yes
+node sq-test.mjs api decision --decision escalated --kb <slug> --claim "…" --verdict insufficient --yes
 ```
 
 `--kb`, `--kbs` y `--var kbId=` aceptan el **UUID o el slug**, igual que en el carril MCP. El servidor resuelve `knowledgeBaseId` solo por id, así que el slug se cambia del lado del cliente contra `GET /knowledge-bases` antes de mandarlo — una petición que no gasta créditos. El comando que el menú imprime conserva el slug, para que sea legible.
@@ -265,7 +267,7 @@ Y dice **dónde se consigue lo que falta**: las pantallas de creación de keys *
 **Antes de eso dice si hace falta conseguirlo, que es la pregunta anterior.** La colección declara los scopes de cada petición **en OR** —alcanza con tener uno—, así que el informe cruza los que faltan o quedaron sin sondear contra los confirmados:
 
 ```
-· agent.retrieve   solo se alcanza por "Agent API / 1. Retrieve", que gasta créditos · pero rag.query abre esas peticiones igual: no hace falta
+· agent.retrieve   solo se alcanza por "Agent API / Retrieve (bring your own LLM)", que gasta créditos · pero rag.query abre esas peticiones igual: no hace falta
 ```
 
 Esa línea es la diferencia entre pedir un permiso y darse cuenta de que ya se tiene el equivalente. Los `agent.*` que cobran son a la vez los que **nunca** se pueden sondear y los que tienen una alternativa más amplia, así que sin ella el informe deja abierta justo la pregunta que se hace quien los mira. Y solo aparece con la alternativa **confirmada**: tranquilizar de más manda a no pedir lo que sí se necesita, que es el defecto opuesto y no es mejor.
@@ -365,7 +367,7 @@ Cada petición lleva en su descripción un bloque `sq-test` legible por máquina
 
 **El original lo genera la plataforma desde sus routers; lo de acá es una copia vendorada.** Cada celda sirve la colección con la que fue construida en `/.well-known/postman-collection.json`, sin credencial, así que el artefacto y el servidor son el mismo build. `api collection --check` **deriva esa URL de tu celda** y reporta la deriva **en los dos sentidos** — lo que el CLI empaqueta y la celda no sirve, y al revés. Sale con `1` si hay deriva, así que puede romper un pipeline.
 
-**La colección está publicada** en [este workspace público](https://www.postman.com/egonzalez-834a9dbf-7945626/sequentia-api). Para contrastar contra ella hace falta una *access key* de lectura propia en `SQ_TEST_COLLECTION_URL` — no viene por default a propósito: es un token, y un token en un repo público es algo que alguien rota algún día. Cómo se saca está en [`collection/PUBLISHING.md`](collection/PUBLISHING.md).
+**Un workspace de Postman ya no es parte del ciclo.** Quien quiera uno lo importa desde la URL de su celda; `SQ_TEST_COLLECTION_URL` existe solo para pisar el origen del `--check` (un fork, una celda de pruebas). Ver [`collection/PUBLISHING.md`](collection/PUBLISHING.md).
 
 Compara contra **el checkout en el que estás parado**, no contra `main`: en una rama atrasada va a reportar deriva que no es real. Es lo correcto —contrasta lo que ESE árbol empaqueta— pero conviene saberlo antes de asustarse.
 
@@ -376,7 +378,7 @@ node sq-test.mjs api collection --refresh    # además guarda lo traído en ~/.c
 
 Compara el **catálogo**, no el JSON crudo: Postman le agrega ids y marcas de tiempo a lo que publica, y un diff textual estaría siempre en rojo — que es la forma más común de que un control deje de controlar. Se comparan método, ruta, cuerpo, la metadata que gobierna `--yes`, la descripción y las variables de colección.
 
-Si la access key se rota o se revoca, **lo único que se rompe es este comando**: el CLI sigue andando con la colección empaquetada. Es a propósito, y es la razón de que el original viva en el repo.
+Si la celda no responde, **lo único que se rompe es este comando**: el CLI sigue andando con la colección empaquetada. Es a propósito, y es la razón de que el original viva en el repo.
 
 `collection-lint.mjs` corre en el CI, sin credenciales ni red, y rechaza una colección que emita una variable que nadie define, que declare una que nadie usa, que traiga un default de URL **alcanzable**, que lleve un valor en `apiKey`, o cuyo `collection/README.md` contradiga la metadata — esa última guarda existe porque la contradicción ya pasó.
 
@@ -419,6 +421,8 @@ Los booleanos (`--json`, `--raw`, `--verbose`, `--yes`) no toman valor: se usan 
 `0` ok · `1` la herramienta devolvió `isError`, o `api collection --check` encontró deriva · `2` uso o configuración · `3` transporte, auth o rate limit.
 
 El `1` es siempre lo mismo: **la operación se hizo y el resultado es negativo**. No lo usa `api doctor`, que sale con `0` aunque falten scopes — ahí el informe *es* el resultado, y una key incompleta no es un fallo del comando.
+
+**`api doctor` sale `0` también cuando la celda rechaza la key entera** (`Credencial: ✘ la key no fue aceptada (401)`), y eso vale decirlo porque es lo único del CLI que rompe la simetría: esa misma key en `api run` sale `3`. El criterio de `doctor` no es «¿la credencial sirve?» sino «¿pude diagnosticarla?», y una key muerta es un diagnóstico exitoso, no un comando fallido. La consecuencia práctica: **`api doctor && desplegar` no es una compuerta de salud** — pasa con la key muerta. Para eso, leé el informe (`--json` trae `credencial`), o usá una petición de verdad, que sí sale `3`.
 
 Pensado para scriptear: `node.exe sq-test.mjs search --kb X --q Y --json | jq -r '.[].slug'`.
 
@@ -474,7 +478,7 @@ La referencia pública de las herramientas muestra ejemplos de `tools/call` suel
 | `mcp-client.mjs` | `SequentiaMcpClient` — transporte reusable (handshake, SSE, sesión, reintentos, errores). Importable desde otros scripts. |
 | `api-client.mjs` | `SequentiaApiClient` — el transporte REST: sin sesión, con la taxonomía de errores del carril API. También importable. |
 | `catalog.mjs` | Lee la colección y la convierte en el catálogo que el CLI ejecuta. Es donde se descarta el host y donde se lee qué escribe cada petición. |
-| `agent.mjs` | Los seis endpoints del carril agéntico por nombre: sus topes, la memoria del `retrievalId` y la clave de idempotencia. |
+| `agent.mjs` | Los siete endpoints del carril agéntico por nombre: sus topes, la memoria del `retrievalId` y la clave de idempotencia. |
 | `doctor.mjs` | El diagnóstico de credencial: qué sondear, cómo clasificar cada fallo y la deducción de qué scope falta. |
 | `doctor-smoke.mjs` | Ejercita esa deducción con sondeos fabricados, sin red ni credencial. Corre en el CI. |
 | `collection-sync.mjs` | Trae la colección publicada y la contrasta con la empaquetada. |

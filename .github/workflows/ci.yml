@@ -101,7 +101,7 @@ jobs:
             const esperado = {
               "2.1": "health", "2.2": "list", "2.3": "run",
               "3.1": "retrieve", "3.2": "query", "3.3": "verify",
-              "3.4": "index-status", "3.5": "gap-report", "3.6": "feedback",
+              "3.4": "index-status", "3.5": "gap-report", "3.6": "feedback", "3.7": "decision",
               "4.1": "loop", "4.2": "loop-no-generate",
               "5.1": "doctor",
               "6.1": "collection-check", "6.2": "collection-refresh",
@@ -146,6 +146,22 @@ jobs:
           # credencial, sin modelo y sin red. Un contrato mal escrito no falla,
           # deja pasar; una politica mal escrita manda algo que nadie evaluo.
           node loop-smoke.mjs
+
+      # El paquete que se publica, corrido de verdad. Es lo unico que ve lo que
+      # `files` deja afuera: el CI corre desde el checkout, donde todo existe.
+      # La 2.2.0 se iba a publicar sin `errores.mjs` ni `http-comun.mjs`, y el
+      # paquete moria en ERR_MODULE_NOT_FOUND antes de imprimir --help.
+      - name: El paquete empaquetado arranca
+        shell: bash
+        run: |
+          set -e
+          dest="$(mktemp -d)"
+          npm pack --pack-destination "$dest" > /dev/null
+          tar -xzf "$dest"/*.tgz -C "$dest"
+          cd "$dest/package"
+          node sq-test.mjs --help > /dev/null
+          node sq-test.mjs api list > /dev/null
+          echo "ok: el paquete arranca y lee su coleccion"
 
       - name: Casos que deben fallar (y con qué código)
         shell: bash
@@ -195,8 +211,12 @@ jobs:
           echo "ok  0  node sq-test.mjs api list"
           esperar 2 node sq-test.mjs api run                                   # falta el nombre
           esperar 2 node sq-test.mjs api run 'no existe'                       # no está en la colección
-          esperar 2 node sq-test.mjs api run 'Analytics'                       # ambiguo: no elige por vos
-          esperar 2 node sq-test.mjs api run '1. Retrieve' --var kbId=x        # gasta creditos, falta --yes
+          # Los dos casos que iban aca —el ambiguo y el que cuesta— se escribian
+          # con el nombre a mano y se pudrieron al vendorar la coleccion (#48):
+          # 'Analytics' dejo de ser ambiguo y '1. Retrieve' dejo de existir. Los
+          # dos seguian saliendo con 2, asi que nadie se entero. Viven ahora en
+          # commands-smoke.mjs, con el nombre DERIVADO del catalogo y afirmando
+          # el motivo y no solo el codigo.
           esperar 2 node sq-test.mjs api run 'Get knowledge base'              # falta --var kbId
           esperar 2 node sq-test.mjs api run 'Health' --var suelto             # --var mal formado
           esperar 2 node sq-test.mjs api run 'Health' --var baseUrl=http://x   # variable reservada
@@ -216,6 +236,7 @@ jobs:
           # `index-status` no gasta ni escribe, asi que no acepta --yes: una
           # opcion aceptada es una opcion usada.
           esperar 2 node sq-test.mjs api index-status --kb X --yes
+          esperar 2 node sq-test.mjs api decision --decision sent              # persiste, falta --yes
 
           # Los topes. Estos SI necesitan una celda configurada, porque la
           # validacion del cuerpo corre despues de resolver la config; sin
@@ -233,6 +254,10 @@ jobs:
           # Sin id recordado, `feedback` se niega: el campo es opcional en el
           # esquema, asi que un vacio escribiria una fila ligada a nada.
           esperar 2 node sq-test.mjs api feedback --kb X --rating helpful --yes "${celda[@]}"
+          esperar 2 node sq-test.mjs api decision --yes "${celda[@]}"                                  # falta --decision
+          esperar 2 node sq-test.mjs api decision --decision quizas --yes "${celda[@]}"                # fuera del enum
+          esperar 2 node sq-test.mjs api decision --decision sent --evidence '[1]' --yes "${celda[@]}" # evidence no es objeto
+          esperar 2 node sq-test.mjs api decision --decision sent --evidence '{x' --yes "${celda[@]}"  # evidence no es JSON
           # `api doctor` no toma opciones: lo que necesita sale de la config.
           # Un flag aceptado y no usado es el fallo silencioso que este CLI
           # rechaza en todas partes.

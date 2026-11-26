@@ -15,7 +15,7 @@ import { stdin, stdout } from "node:process";
 import { SequentiaMcpClient } from "./mcp-client.mjs";
 import { SequentiaApiClient } from "./api-client.mjs";
 import { AGENT_COMMANDS, RETRIEVAL_TTL_MS, agentNecesitaConfirmacion, claveIdempotencia, recordarRetrieval } from "./agent.mjs";
-import { buscarPeticion, cargarCatalogo, efectosDe, necesitaConfirmacion, resolverPeticion } from "./catalog.mjs";
+import { buscarPeticion, cargarCatalogo, efectosDe, fraseDeEfecto, necesitaConfirmacion, resolverPeticion } from "./catalog.mjs";
 import { diagnosticar, formatearInforme } from "./doctor.mjs";
 import { catalogoDe, comparar, formatearDerivas, guardarCache, traerPublicada } from "./collection-sync.mjs";
 import { describirError } from "./errores.mjs";
@@ -656,6 +656,7 @@ const SECCIONES_API = [
       { etiqueta: "Estado del índice", alias: "index-status", agente: "index-status" },
       { etiqueta: "Reportar un hueco ⚠", alias: "gap-report", agente: "gap-report" },
       { etiqueta: "Calificar una recuperación ⚠", alias: "feedback", agente: "feedback" },
+      { etiqueta: "Registrar una decisión del agente ⚠", alias: "decision", agente: "decision" },
     ],
   },
   {
@@ -673,7 +674,7 @@ const SECCIONES_API = [
   },
   {
     titulo: "Colección",
-    nota: "el original vive en el repo; Postman es la copia",
+    nota: "el original lo sirve la celda; esto es la copia vendorada",
     items: [
       { etiqueta: "Contrastar con lo publicado", alias: "collection-check", correr: (ctx) => itemCollection(ctx, false) },
       { etiqueta: "Contrastar y actualizar la caché", alias: "collection-refresh", correr: (ctx) => itemCollection(ctx, true) },
@@ -858,8 +859,8 @@ async function itemAgente(ctx, nombre) {
   }
   const confirmar = agentNecesitaConfirmacion(spec);
   if (confirmar) {
-    const que = [spec.persists && `persiste ${spec.persists}`, spec.spendsCredits && "gasta créditos de IA"].filter(Boolean).join(" y ");
-    if (!(await confirmarEfecto(ctx.rl, `"api ${nombre}" ${que}`))) return;
+    const { que, detalle } = fraseDeEfecto(spec);
+    if (!(await confirmarEfecto(ctx.rl, `"api ${nombre}" ${que}`, detalle))) return;
   }
 
   await correrApi(ctx, { comando: nombre, flags, necesitaYes: confirmar }, async () => {
@@ -932,8 +933,9 @@ async function itemCollection(ctx, refresh) {
 }
 
 /** Confirmación de un efecto, el equivalente en menú de `--yes`. */
-async function confirmarEfecto(rl, que) {
+async function confirmarEfecto(rl, que, detalle = null) {
   console.log(`\n   ⚠ ${que}.`);
+  if (detalle) console.log(`     Qué deja: ${detalle}`);
   const r = (await rl.question("   ¿Seguro? [s/N]: ")).trim().toLowerCase();
   if (r === "s" || r === "si" || r === "sí") return true;
   console.log("   cancelado.");

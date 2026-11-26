@@ -342,3 +342,29 @@ export function efectosDe(entrada) {
 export function necesitaConfirmacion(entrada) {
   return Boolean(entrada.persists) || entrada.spendsCredits;
 }
+
+/**
+ * La frase de la guarda, partida en lo que escribimos y lo que citamos.
+ *
+ * El mensaje de `--yes` es el único de la app que no controlaba su propio
+ * texto: se armaba como `persiste ${persists}`, y `persists` viene de DOS
+ * fuentes con convenciones incompatibles. `agent.mjs` lo escribe acá, en
+ * castellano y como sintagma nominal pensado para encajar detrás de «persiste»
+ * («una fila de feedback de utilidad…»). La colección la genera la plataforma,
+ * en inglés y como oración completa, y al interpolarla salía castellano roto —
+ * «persiste a DRAFT article in the KB — … someone has to delete y gasta
+ * créditos de IA»— justo en el aviso que decide si alguien gasta plata o
+ * escribe en la KB de un cliente.
+ *
+ * Traducir el texto de arriba no es opción: no es nuestro y va a seguir
+ * cambiando en cada vendorado. Así que la oración se arma sólo con palabras
+ * nuestras y el texto ajeno va aparte, en su propia línea y como cita. Queda
+ * gramatical con cualquiera de las dos fuentes, y en el idioma que venga.
+ */
+export function fraseDeEfecto(entrada) {
+  const que = [entrada.persists && "deja algo escrito", entrada.spendsCredits && "gasta créditos de IA"]
+    .filter(Boolean)
+    .join(" y ");
+  const detalle = entrada.persists ? String(entrada.persists).trim() : null;
+  return { que, detalle };
+}

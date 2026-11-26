@@ -13,12 +13,13 @@
  *   node commands-smoke.mjs
  */
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { ApiTransportError } from "./api-client.mjs";
 import { UsageError, buildCommandLine, buscarKb, esUuid, resolveKbIdApi, resolverKbsDeFlags } from "./commands.mjs";
+import { cargarCatalogo } from "./catalog.mjs";
 import { EXIT_TOOL_ERROR, EXIT_TRANSPORT, EXIT_USAGE, describirError } from "./errores.mjs";
 import { McpToolError } from "./mcp-client.mjs";
 
@@ -71,6 +72,38 @@ await comprobar(
   () => enSandbox(`import { resolveApiConfig } from ${JSON.stringify(COMMANDS)}; console.log(JSON.stringify(resolveApiConfig({}).apiUrl));`),
   "https://celda-del-usuario.invalid",
 );
+
+// Y el caso que este guion NO cubría, porque corre desde un directorio de
+// trabajo distinto del de instalación: trabajando DESDE el repo los dos son el
+// mismo archivo, y deduplicar conservando la primera aparición colapsaba el
+// `.env` del proyecto en la ranura de instalación —la de MENOR prioridad—, así
+// que `~/.config/sq-test/.env` lo pisaba. El comando salía con éxito contra la
+// celda equivocada y con la key equivocada, sin decir nada.
+//
+// Es exactamente el flujo que el README recomienda: clonar, copiar
+// `.env.example` y trabajar ahí. Se simula poniendo el cwd EN el directorio del
+// módulo, que es lo que hace `HERE === cwd`.
+// Se afirma el ORDEN, no los valores: así no depende de que exista un `.env`
+// real en el checkout de quien corra esto, que en el CI no existe.
+const AQUI = fileURLToPath(new URL(".", import.meta.url));
+const orden = JSON.parse(
+  spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", `import { envFileCandidates } from ${JSON.stringify(COMMANDS)}; console.log(JSON.stringify(envFileCandidates()));`],
+    { cwd: AQUI, env: { ...ENTORNO, HOME: SANDBOX, USERPROFILE: SANDBOX }, encoding: "utf8" },
+  ).stdout,
+);
+await comprobar(
+  "con cwd === directorio del módulo, el .env de ahí queda ÚLTIMO (máxima prioridad)",
+  () => orden.at(-1) === join(AQUI, ".env"),
+  true,
+);
+await comprobar(
+  "y el del usuario queda ANTES, o sea por debajo",
+  () => orden.indexOf(join(SANDBOX, ".config", "sq-test", ".env")) < orden.length - 1,
+  true,
+);
+
 rmSync(SANDBOX, { recursive: true, force: true });
 
 // ---------------------------------------------------------------------------
@@ -91,7 +124,15 @@ await comprobar("un posicional simple no lleva comillas", () => buildCommandLine
 // Y el CLI parsea lo que se imprimió: un --var repetido y un posicional
 // citado llegan enteros. Se corre el parser de verdad, sin red.
 const CLI = fileURLToPath(new URL("./sq-test.mjs", import.meta.url));
-const parsea = (args) => spawnSync(process.execPath, [CLI, ...args], { env: { ...ENTORNO, SQ_TEST_TOKEN: "x" }, encoding: "utf8" });
+// `SQ_TEST_API_URL: ""` a propósito: una variable de proceso presente gana a
+// todo `.env`, y vacía se lee como ausente. Sin eso, el `.env` que un
+// colaborador crea siguiendo el README —copiar `.env.example`— le daba una URL
+// de verdad y estos casos, que afirman "falla recién por config", fallaban por
+// otra cosa. Pasaban sólo porque el `.env` del proyecto se ignoraba, que es el
+// defecto que este mismo PR arregla: el guion tiene que ser inmune a la config
+// de quien lo corre, no depender de que no tenga ninguna.
+const parsea = (args) =>
+  spawnSync(process.execPath, [CLI, ...args], { env: { ...ENTORNO, SQ_TEST_TOKEN: "x", SQ_TEST_API_URL: "" }, encoding: "utf8" });
 await comprobar(
   "`api run 'Get knowledge base' --var kbId=abc` pasa el parseo (falla recién por config)",
   () => /SQ_TEST_API_URL/.test(parsea(["api", "run", "Get knowledge base", "--var", "kbId=abc"]).stderr),
@@ -164,6 +205,114 @@ await comprobar("un TypeError es inesperado y conserva el stack", () => {
   const d = describirError(new TypeError("boom"));
   return [d.clase, /TypeError: boom/.test(d.lineas[0]), /commands-smoke/.test(d.lineas[0])];
 }, ["inesperado", true, true]);
+
+// --- Las guardas de `api run`, con el nombre SACADO DEL CATÁLOGO -------------
+//
+// El CI las cubría escribiendo el nombre a mano, y al vendorar la colección
+// (#48) dos casos se pudrieron sin que nada avisara, porque los dos salen con 2
+// y `esperar` sólo mira el código:
+//
+//   api run 'Analytics'                    decía "ambiguo"  → hoy resuelve ÚNICO
+//   api run '1. Retrieve' --var kbId=x     decía "cuesta"   → ese nombre ya no existe
+//
+// El segundo dejó sin cobertura el guarda que impide gastar créditos sin
+// confirmar, que es el más caro de perder. Y va a volver a pasar: los nombres
+// ahora los escribe el generador de la plataforma y cambian en cada vendorado.
+//
+// Así que el nombre se DERIVA de la metadata —una que cuesta, una que escribe,
+// un prefijo que de verdad es ambiguo— y se afirma el MOTIVO, no sólo el
+// código. Si mañana no hubiera ninguna petición que cobre, eso también es un
+// hallazgo y se reporta en vez de pasar en verde.
+const { entradas } = cargarCatalogo();
+const porEfecto = (p) => [...entradas.values()].find(p) ?? null;
+const queCuesta = porEfecto((e) => e.spendsCredits && !e.persists);
+const queEscribe = porEfecto((e) => e.persists);
+
+// Un prefijo ambiguo de verdad: el nombre corto que comparten dos peticiones de
+// carpetas distintas. Derivado, porque cuál es depende de la colección del día.
+const porNombreCorto = new Map();
+for (const e of entradas.values()) {
+  const corto = e.nombre.split(" / ").at(-1);
+  porNombreCorto.set(corto, (porNombreCorto.get(corto) ?? 0) + 1);
+}
+const ambiguo = [...porNombreCorto].find(([, n]) => n > 1)?.[0] ?? null;
+
+const correrCli = (...args) =>
+  spawnSync(process.execPath, [fileURLToPath(new URL("./sq-test.mjs", import.meta.url)), ...args], {
+    encoding: "utf8",
+    env: { ...process.env, SQ_TEST_ENV_FILE: join(TRABAJO, "no-existe.env"), SQ_TEST_API_URL: "https://celda.invalid" },
+  });
+
+await comprobar("la colección declara al menos una petición que cuesta y una que escribe", [Boolean(queCuesta), Boolean(queEscribe)], [true, true]);
+await comprobar("y al menos un nombre corto ambiguo, para poder probar el desempate", Boolean(ambiguo), true);
+
+if (queCuesta) {
+  const r = correrCli("api", "run", queCuesta.nombre, "--var", "kbId=x");
+  await comprobar(
+    `"${queCuesta.nombre}" sin --yes: sale 2 Y avisa del cargo`,
+    [r.status, /créditos/.test(r.stderr), /--yes/.test(r.stderr)],
+    [EXIT_USAGE, true, true],
+  );
+}
+if (queEscribe) {
+  // Se afirma que el aviso dice QUÉ deja escrito, no cómo lo redacta: el texto
+  // sale de la colección y cambia en cada vendorado, pero que llegue al usuario
+  // es lo que hace útil la confirmación.
+  const r = correrCli("api", "run", queEscribe.nombre, "--var", "kbId=x");
+  await comprobar(
+    `"${queEscribe.nombre}" sin --yes: sale 2 Y dice qué deja escrito`,
+    [r.status, r.stderr.includes(String(queEscribe.persists).trim()), /--yes/.test(r.stderr)],
+    [EXIT_USAGE, true, true],
+  );
+}
+if (ambiguo) {
+  const r = correrCli("api", "run", ambiguo);
+  await comprobar(`"${ambiguo}" es ambiguo: sale 2 Y no elige por vos`, [r.status, /coincide con \d+ peticiones/.test(r.stderr)], [EXIT_USAGE, true]);
+}
+
+// Y los nombres que el CI TODAVÍA escribe a mano: que sigan resolviendo a una
+// sola petición. Hoy son correctos —los verifiqué uno por uno—, y lo que cierra
+// esta aserción es que dejen de serlo en silencio, que es exactamente lo que
+// pasó con los dos de arriba: un nombre que ya no existe hace que su caso siga
+// saliendo 2, por «no coincide», y el guarda que decía probar queda desarmado.
+const NOMBRES_EN_EL_CI = ["Get knowledge base", "Health"];
+await comprobar(
+  "los nombres que el CI escribe a mano siguen resolviendo a UNA sola petición",
+  () =>
+    NOMBRES_EN_EL_CI.map((n) => [n, [...entradas.keys()].filter((k) => k.toLowerCase().includes(n.toLowerCase())).length])
+      .filter(([, n]) => n !== 1),
+  [],
+);
+
+// --- Lo que el paquete publicado se lleva --------------------------------
+//
+// La `2.2.0` se iba a publicar SIN `errores.mjs` ni `http-comun.mjs`. Los dos se
+// agregaron durante la épica, los dos se importan en runtime, y ninguno estaba
+// en `files`. El paquete instalado moría en `ERR_MODULE_NOT_FOUND` antes de
+// imprimir `--help`: no un comando roto, la herramienta entera.
+//
+// El CI no podía verlo porque corre desde el checkout, donde los archivos
+// existen; sólo se ve empaquetando. Así que acá se recorre el grafo de imports
+// desde el `bin` declarado y se afirma que todo lo local que se alcanza viaja.
+// Derivado del grafo y no de una lista, que es lo que falló.
+const raiz = fileURLToPath(new URL(".", import.meta.url));
+const pkg = JSON.parse(readFileSync(join(raiz, "package.json"), "utf8"));
+const declarados = new Set(pkg.files ?? []);
+
+const alcanzables = new Set();
+const porVisitar = [String(Object.values(pkg.bin ?? {})[0] ?? pkg.main ?? "sq-test.mjs").replace(/^\.\//, "")];
+while (porVisitar.length) {
+  const f = porVisitar.pop();
+  if (alcanzables.has(f) || !existsSync(join(raiz, f))) continue;
+  alcanzables.add(f);
+  for (const m of readFileSync(join(raiz, f), "utf8").matchAll(/from\s+"\.\/([^"]+\.mjs)"/g)) porVisitar.push(m[1]);
+}
+
+await comprobar(
+  "todo módulo que el bin alcanza está en `files` del package.json",
+  () => [...alcanzables].filter((f) => !declarados.has(f)).sort(),
+  [],
+);
 
 console.log(fallos ? `\n${fallos} fallos` : "\nTodo en verde.");
 process.exitCode = fallos ? 1 : 0;

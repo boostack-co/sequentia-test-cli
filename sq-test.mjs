@@ -41,6 +41,7 @@ import {
   buscarPeticion,
   cargarCatalogo,
   efectosDe,
+  fraseDeEfecto,
   necesitaConfirmacion,
   resolverPeticion,
 } from "./catalog.mjs";
@@ -484,10 +485,12 @@ async function comandoApi(flags, positional) {
     // La guarda va primero y antes de cualquier config: `api gap-report` sin
     // --yes tiene que decir eso, no "falta la URL de la celda".
     if (agentNecesitaConfirmacion(spec) && !flags.yes) {
-      const que = [spec.persists && `persiste ${spec.persists}`, spec.spendsCredits && "gasta créditos de IA"]
-        .filter(Boolean)
-        .join(" y ");
-      throw new UsageError(`"api ${sub}" ${que}.\n  Volvé a correrlo con --yes si querés hacerlo de verdad.`);
+      const { que, detalle } = fraseDeEfecto(spec);
+      throw new UsageError(
+        `"api ${sub}" ${que}.` +
+          (detalle ? `\n  Qué deja: ${detalle}` : "") +
+          `\n  Volvé a correrlo con --yes si querés hacerlo de verdad.`,
+      );
     }
 
     const { apiUrl, token } = resolveApiConfig(flags);
@@ -771,11 +774,11 @@ async function comandoApi(flags, positional) {
     // cuesta nace protegida, sin que nadie tenga que acordarse de agregarla a
     // una lista. Es la misma promesa que SIDE_EFFECT_TOOLS da en el carril MCP.
     if (necesitaConfirmacion(entrada) && !flags.yes) {
-      const que = [entrada.persists && `persiste ${entrada.persists}`, entrada.spendsCredits && "gasta créditos de IA"]
-        .filter(Boolean)
-        .join(" y ");
+      const { que, detalle } = fraseDeEfecto(entrada);
       throw new UsageError(
-        `"${entrada.nombre}" ${que}.\n  Volvé a correrlo con --yes si querés hacerlo de verdad.`,
+        `"${entrada.nombre}" ${que}.` +
+          (detalle ? `\n  Qué deja: ${detalle}` : "") +
+          `\n  Volvé a correrlo con --yes si querés hacerlo de verdad.`,
       );
     }
 
