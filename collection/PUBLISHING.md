@@ -56,6 +56,19 @@ Ya no es parte del ciclo: un cliente puede importar directamente desde la URL de
 - **La interfaz puede ir varios minutos por detrás de la nube.** Un borrado se ve aplicado, se refresca, y vuelve.
 - **Por las dos anteriores, la pantalla no sirve para dar por buena una publicación.** La API sí, y es la que lee `--check`.
 
+Y una cuarta, de la republicación de la 2.2.0 (2026-11-26):
+
+- **El Replace de *Import → Link* tampoco conserva el `uid`.** Crea una colección nueva con otro `uid` y retira la anterior, así que el enlace público corto cambia con cada republicación y el viejo deja de funcionar. Después de cada Replace hay que volver a sacar el enlace de *Share* y actualizar donde se haya publicado. El aviso de la colección paralela sigue valiendo: si quedan dos, se borra la nueva y se repite.
+
+Para comprobar lo publicado sin key, Postman sirve la colección y el entorno públicos en JSON:
+
+```http
+GET https://www.postman.com/_api/collection/<uid>?populate=true
+GET https://www.postman.com/_api/environment/<uid>
+```
+
+Con eso se confirma que el número de carpetas y peticiones coincide con la copia vendorada y que el entorno publicado lleva `apiKey` vacío y `baseUrl` en el `.invalid` por defecto. Es un endpoint interno de la web de Postman, sin contrato: si deja de responder, la vía de respaldo es abrir el enlace público en una ventana privada.
+
 ## Agregar una petición
 
 Va en el catálogo del generador, del lado de la plataforma. Lo que este CLI le exige a cada entrada, y que **rompe la carga entera** si falta:
