@@ -168,8 +168,9 @@ El otro frente de integración de Sequentia: la REST que acepta API key. Entra p
 | `api index-status` | Cuánto de la KB está indexado. `--kb` |
 | `api gap-report` | Reporta que la KB no cubre algo. `--kb --q [--priority] --yes` |
 | `api feedback` | Califica una recuperación que un humano ya leyó. `--kb --rating --yes` |
+| `api decision` | Registra qué hizo el agente con una respuesta (`sent`, `reformulated`, `escalated`, `blocked`). `--decision [--kb] [--claim] [--verdict] [--evidence '{…}'] --yes` |
 | `api doctor` | Perfila la credencial: qué scopes tiene, cuáles no, y dónde se consigue lo que falta. |
-| `api collection --check` | Contrasta la colección empaquetada con la publicada en Postman. `[--refresh]` |
+| `api collection --check` | Contrasta la colección empaquetada con la que sirve tu celda en `/.well-known/`. `[--refresh]` |
 | `api loop` | El bucle: recuperar → generar con **tu** modelo → verificar → decidir. `--kb '<pregunta>'` |
 
 ```bash
@@ -195,12 +196,13 @@ Se acepta **con y sin `/api/v1`**. No es una comodidad: cada ruta ya empieza con
 
 ### Los atajos del carril agéntico
 
-`api run` ya puede correr estos seis endpoints. Los atajos existen por lo que el ejecutor genérico no puede dar: **convertir un 400 del servidor en un mensaje entendible sin salir a la red**, y encadenar `retrieve → feedback`.
+`api run` ya puede correr estos siete endpoints. Los atajos existen por lo que el ejecutor genérico no puede dar: **convertir un 400 del servidor en un mensaje entendible sin salir a la red**, y encadenar `retrieve → feedback`.
 
 ```bash
 node sq-test.mjs api retrieve --kb <slug> --q "¿cómo restablezco la contraseña?" --yes
 node sq-test.mjs api feedback --kb <slug> --rating helpful --yes   # usa el id recordado
 node sq-test.mjs api index-status --kb <slug>                      # ni escribe ni cuesta: no pide --yes
+node sq-test.mjs api decision --decision escalated --kb <slug> --claim "…" --verdict insufficient --yes
 ```
 
 `--kb`, `--kbs` y `--var kbId=` aceptan el **UUID o el slug**, igual que en el carril MCP. El servidor resuelve `knowledgeBaseId` solo por id, así que el slug se cambia del lado del cliente contra `GET /knowledge-bases` antes de mandarlo — una petición que no gasta créditos. El comando que el menú imprime conserva el slug, para que sea legible.
@@ -476,7 +478,7 @@ La referencia pública de las herramientas muestra ejemplos de `tools/call` suel
 | `mcp-client.mjs` | `SequentiaMcpClient` — transporte reusable (handshake, SSE, sesión, reintentos, errores). Importable desde otros scripts. |
 | `api-client.mjs` | `SequentiaApiClient` — el transporte REST: sin sesión, con la taxonomía de errores del carril API. También importable. |
 | `catalog.mjs` | Lee la colección y la convierte en el catálogo que el CLI ejecuta. Es donde se descarta el host y donde se lee qué escribe cada petición. |
-| `agent.mjs` | Los seis endpoints del carril agéntico por nombre: sus topes, la memoria del `retrievalId` y la clave de idempotencia. |
+| `agent.mjs` | Los siete endpoints del carril agéntico por nombre: sus topes, la memoria del `retrievalId` y la clave de idempotencia. |
 | `doctor.mjs` | El diagnóstico de credencial: qué sondear, cómo clasificar cada fallo y la deducción de qué scope falta. |
 | `doctor-smoke.mjs` | Ejercita esa deducción con sondeos fabricados, sin red ni credencial. Corre en el CI. |
 | `collection-sync.mjs` | Trae la colección publicada y la contrasta con la empaquetada. |
