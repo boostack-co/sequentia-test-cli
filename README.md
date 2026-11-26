@@ -406,7 +406,7 @@ Y un caso que no es un código: un **`200` cuyo cuerpo no es JSON** se rechaza e
 
 | Opción | Efecto |
 | :--- | :--- |
-| `--url <url>` | Endpoint MCP. Default `https://mcp.sequentia.co/mcp`; solo hace falta contra un despliegue propio. |
+| `--url <url>` | Endpoint MCP. Default `https://mcp.sequentia.co/mcp`. Hace falta `--url <origen>/mcp` cuando la key no es de ese servicio (por ejemplo, de un despliegue propio): el endpoint por defecto no la reconoce y responde `401`. |
 | `--api-url <url>` | Origen directo de la celda para el carril API. Sin default. Solo lo aceptan los comandos `api`. |
 | `--token <tok>` | API key; pisa la del `.env`. |
 | `--json` | Payload des-anidado en JSON, apto para `jq`. |
