@@ -62,7 +62,7 @@ export const API_URL_KEY = "SQ_TEST_API_URL";
  * el push** de un repo que la contenga — push protection la detecta por nombre.
  * Se puede desbloquear a mano, pero un token en un repo público es algo que
  * alguien rota algún día, y ese día `--check` se rompe sin que nadie lo haya
- * tocado. El workspace y el id sí están en `collection/PUBLISHING.md`.
+ * tocado.
  *
  * El endpoint anónimo (`www.postman.com/collections/<uid>`) tampoco sirve de
  * default aunque el workspace sea público: degrada el schema a v2.0.0 y la
@@ -73,7 +73,7 @@ export const API_URL_KEY = "SQ_TEST_API_URL";
  */
 export const COLLECTION_URL_KEY = "SQ_TEST_COLLECTION_URL";
 
-/** Dónde sirve cada celda la colección con la que fue construida (Sequentia#6195). */
+/** Dónde sirve cada celda la colección con la que fue construida. */
 export const COLLECTION_PATH = "/.well-known/postman-collection.json";
 
 // ---------------------------------------------------------------------------

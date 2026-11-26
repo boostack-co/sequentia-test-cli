@@ -8,6 +8,7 @@ Los **números del menú son contrato público**: se agregan al final y no se re
 
 ### Cambiado
 
+- **`collection/PUBLISHING.md` explica solo cómo se revendora la colección para un release**, con los comandos para bajarla de la celda y verificarla. Cómo se publica en un workspace de Postman deja de estar en este repo: no es algo que haga quien usa el CLI.
 - **La colección empaquetada se vendoró de nuevo desde la celda.** Solo cambia la descripción general: ya no cierra con una nota interna para quien mantiene el generador, y la lista de scopes que ningún formulario de keys otorga nombra `articles.write` una vez en vez de cuatro. Peticiones, scopes y variables no cambian.
 
 ## [2.2.0] — 2026-11-26
@@ -61,7 +62,7 @@ Agrega el **carril agéntico de la API REST** (`/api/v1`) junto al de MCP, que s
 - **`AGENT_COMMANDS` y la colección declaran lo mismo por duplicado y nada lo comprobaba.** La guarda de `--yes` lee de uno para `api <atajo>` y del otro para `api run`; `agent-smoke.mjs` afirma ahora que método, ruta, scopes, `persists` y `spendsCredits` coinciden.
 - **El selector de KB del menú MCP pedía `list_knowledge_bases` dos veces por acción**: una para dibujar la lista y otra para volver a mapear el slug que acababa de salir de ella.
 
-- **La colección llegó a estar publicada a mano en un workspace público de Postman**, y de ahí salieron las tres trampas que `collection/PUBLISHING.md` conserva: un import puede crear una colección **paralela** en vez de reemplazar, la interfaz puede ir minutos por detrás de la nube, y por las dos anteriores la pantalla no sirve para dar por buena una publicación. Ya no es parte del ciclo: quien quiera el workspace lo importa desde la URL de su celda.
+- **La colección llegó a estar publicada a mano en un workspace público de Postman**, y ya no es parte del ciclo: quien quiera el workspace lo importa desde la URL de su celda.
 
 ### Seguridad
 
@@ -79,7 +80,7 @@ Agrega el **carril agéntico de la API REST** (`/api/v1`) junto al de MCP, que s
 ### La colección ya no se escribe acá
 
 - **El artefacto canónico lo genera la plataforma desde sus routers** y cada celda lo sirve en `/.well-known/postman-collection.json`, sin credencial. Esta carpeta pasa a ser una **copia vendorada**: 28 peticiones —21 REST y 7 de MCP—, con las carpetas `Ingest (iPaaS)`, `Bulk article edits` y `MCP` que la escrita a mano no tenía.
-- **Revendorada con el catálogo de whitespace-co/Sequentia#11955** (#57): entran `Agent API → Record an agent decision` y la carpeta `Bulk article edits` (renombrar, mover de categoría y deprecar hasta 200 artículos de una KB; ids de relleno que responden `404` hasta que se reemplazan), y cuatro peticiones de lectura pasan a declarar `internalRead: true` (*List / search articles*, *Get article*, *Query knowledge base (lexical)*, *Verify a claim*). Quedan **7 que escriben y 6 que gastan créditos**; las ediciones en lote no tienen atajo propio porque `api run` las corre con la misma guarda de `--yes`. El entorno no cambió.
+- **Revendorada con el catálogo nuevo de la plataforma** (#57): entran `Agent API → Record an agent decision` y la carpeta `Bulk article edits` (renombrar, mover de categoría y deprecar hasta 200 artículos de una KB; ids de relleno que responden `404` hasta que se reemplazan), y cuatro peticiones de lectura pasan a declarar `internalRead: true` (*List / search articles*, *Get article*, *Query knowledge base (lexical)*, *Verify a claim*). Quedan **7 que escriben y 6 que gastan créditos**; las ediciones en lote no tienen atajo propio porque `api run` las corre con la misma guarda de `--yes`. El entorno no cambió.
 - **`api collection --check` deriva la URL de tu celda** (`SQ_TEST_API_URL`) en vez de apuntar a un sitio fijo. Contrastar contra una celda ajena compararía contra un contrato que no es el que vas a llamar — y un default fijo traería una coordenada de celda a un repo público. `SQ_TEST_COLLECTION_URL` sigue existiendo para pisar el origen.
 - **Las peticiones de MCP se saltan** al armar el catálogo: son otro transporte y el CLI ya cubre MCP por su carril propio. Quedan en el artefacto porque para una persona en Postman sí son útiles.
 - **Quedan fuera cinco peticiones** que la colección escrita a mano sí tenía: el detalle de analytics (`searches`, `feedback`, `top-articles`), `gaps/stats` y `Categories (iPaaS)`. No es un pendiente: el generador las declara excluidas, cada una con su motivo (una petición de analytics alcanza para mostrar la forma, `gaps/stats` es un agregado del listado que sí está, y ninguna petición depende del lookup de categorías). Si alguna vuelve, entra por un revendorado y no por una edición acá.

@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Tres clases, no una: la API key de Sequentia, la access key / API key
-      # de Postman (que PUBLISHING.md promete que este job rechaza) y un host
+      # de Postman (que AGENTS.md prohíbe en el repo) y un host
       # de celda real, que es lo que ya se filtró una vez (84cbd7d) con este
       # job en verde. `mcp.sequentia.co` es público y queda fuera del patrón:
       # lo que no puede entrar es un origen de celda con la forma f-t-g-c.
